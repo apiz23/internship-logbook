@@ -9,25 +9,29 @@ software engineering internship, generalized so anyone can drop it into
 their own repo and use it for their own internship, regardless of field
 or agent tool.
 
-## Who this is for
-
-Anyone required to keep a daily/weekly internship or training logbook
-who would rather write rough notes at the end of the day than format a
-report by hand — while still keeping the record accurate enough to
-submit to a university or employer.
-
 ## What's in this repo
 
 ```text
 internship-logbook/
 ├── SKILL.md                          ← the full instructions/prompt
+├── AGENTS.md                         ← user identity + timeline (local)
+├── scripts/
+│   ├── config.py                     ← storage configuration
+│   ├── google_drive_auth.py          ← OAuth2 authentication
+│   └── google_drive_provider.py      ← Google Drive storage provider
 ├── assets/
-│   ├── AGENTS-template.md            ← fill this in once, for yourself
-│   ├── daily-template-simple.md      ← lightweight daily entry format
-│   ├── daily-template-detailed.md    ← fuller daily entry format
-│   └── project-template.md           ← one of these per ongoing project
-└── references/
-    └── writing-style.md              ← tone guide + before/after examples
+│   ├── AGENTS-template.md          ← fill this in once, for yourself
+│   ├── daily-template-simple.md    ← lightweight daily entry format
+│   ├── daily-template-detailed.md  ← fuller daily entry format
+│   └── project-template.md         ← one of these per ongoing project
+├── templates/
+│   ├── daily-template.md           ← generic daily template
+│   └── weekly-template.md          ← generic weekly template
+├── references/
+│   └── writing-style.md            ← tone guide + before/after examples
+├── tests/
+│   └── test_google_drive.py        ← mocked integration tests
+└── .gitignore                      ← excludes credentials and personal data
 ```
 
 Nothing in here is specific to any one person, university, or job —
@@ -112,6 +116,105 @@ This was written by a software engineering intern, so the examples in
 Adjust `AGENTS.md`'s "Notes" field and your `projects/*.md` files for
 whatever your actual work is (data analysis, design, marketing, lab
 research, etc.) — you shouldn't need to touch `SKILL.md` itself.
+
+## Storage Providers
+
+The Internship Logbook supports two storage backends:
+
+### Local Storage (default)
+
+Markdown files are stored locally in the repository:
+- `daily/YYYY/MM/YYYY-MM-DD.md`
+- `weeks/YYYY/Week-XX.md`
+- `projects/<project-name>.md`
+
+No configuration needed — this is the default.
+
+### Google Drive Storage
+
+Markdown files are stored in your Google Drive folder.
+
+#### Prerequisites
+
+1. **Google Cloud Project**: Create a project at
+   [console.cloud.google.com](https://console.cloud.google.com).
+
+2. **Enable Google Drive API**: In the API Library, enable the
+   Google Drive API.
+
+3. **Create OAuth Credentials**: Go to Credentials → Create Credentials
+   → OAuth 2.0 Client ID → Desktop app. Download the
+   `client_secret.json` file.
+
+4. **Place credentials**: Put `client_secret.json` at:
+   ```
+   ~/.hermes/google_client_secret.json
+   ```
+
+5. **Authorize**: Run the authentication script:
+   ```bash
+   python scripts/google_drive_auth.py --check
+   ```
+   This opens a browser for you to authorize the app. The token is
+   saved to `~/.hermes/google_token.json`.
+
+#### Enabling Google Drive
+
+Set the `STORAGE_PROVIDER` environment variable:
+```bash
+export STORAGE_PROVIDER=google_drive
+export GOOGLE_DRIVE_ROOT_FOLDER_ID=YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID
+```
+
+Or create a `scripts/config.json`:
+```json
+{
+  "provider": "google_drive",
+  "google_drive": {
+    "enabled": true,
+    "root_folder_id": "YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID"
+  }
+}
+```
+
+#### Folder Structure
+
+When Google Drive is enabled, files are stored in:
+```
+internship-logbook/
+├── daily/YYYY/MM/YYYY-MM-DD.md
+├── weekly/YYYY/Week-XX.md
+├── monthly/YYYY/YYYY-MM.md
+└── templates/
+```
+
+#### Security
+
+- **Credentials never leave your machine**: `google_client_secret.json`
+  and `google_token.json` are stored at `~/.hermes/` and are excluded
+  from `.gitignore`.
+- **No hardcoded credentials**: The repository uses placeholder
+  `YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID`.
+- **Narrow scope**: The OAuth token uses only `https://www.googleapis.com/auth/drive.file`
+  — the app can only access files it creates.
+- **Tokens are not logged**: No credentials or tokens are printed
+  in logs, reports, or console output.
+
+#### Disabling Google Drive
+
+Set `STORAGE_PROVIDER=local` or remove the environment variable.
+The skill continues to work with local storage.
+
+## Other Hermes users
+
+Anyone can configure their own Google Drive integration:
+
+1. Clone this repo
+2. Create a Google Cloud project with Drive API enabled
+3. Download `client_secret.json` and place at `~/.hermes/google_client_secret.json`
+4. Run `python scripts/google_drive_auth.py --check`
+5. Set `GOOGLE_DRIVE_ROOT_FOLDER_ID` to their own Drive folder ID
+6. The skill works the same for everyone — no source code changes needed
 
 ## License
 

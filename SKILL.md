@@ -66,12 +66,43 @@ files" below).
 │   └── week-XX.md          ← one file per internship week
 ├── projects/
 │   └── <project-name>.md   ← persistent context per project/workstream
-└── attachments/
-    └── week-XX/
+├── attachments/
+│   └── week-XX/
+└── scripts/
+    ├── config.py              ← storage configuration (local + Google Drive)
+    ├── google_drive_auth.py   ← OAuth2 authentication for Google Drive
+    └── google_drive_provider.py ← Google Drive storage provider
 ```
 
 If the user already has a different layout, adapt to it rather than
 forcing this one — the layout matters less than the rules below.
+
+## Storage providers
+
+The logbook supports two storage backends, configured via `scripts/config.py`:
+
+| Provider | Description | Configuration |
+|----------|-------------|---------------|
+| `local` | Markdown files in the repo (default) | No setup needed |
+| `google_drive` | Markdown files in Google Drive | Requires OAuth setup |
+
+### Local storage (default)
+
+Files are stored directly in the repository as Markdown. No authentication required.
+
+### Google Drive storage
+
+Files are stored in a configured Google Drive folder. Requires:
+
+1. Google Cloud project with Drive API enabled
+2. OAuth 2.0 Desktop credentials (`client_secret.json`)
+3. `STORAGE_PROVIDER=google_drive` and `GOOGLE_DRIVE_ROOT_FOLDER_ID` set
+
+See the README for full setup instructions.
+
+The core logbook logic does NOT depend on Google Drive directly.
+All Drive operations go through `scripts/google_drive_provider.py`,
+which provides the same interface as local storage.
 
 ## Core workflow
 
@@ -265,3 +296,9 @@ command exists; typing a bare slash gets "Unknown command."
   — the two supported daily entry formats
 - `assets/project-template.md` — template for a new `projects/<name>.md`
 - `references/writing-style.md` — tone guide and before/after examples
+- `scripts/config.py` — storage provider configuration
+- `scripts/google_drive_auth.py` — Google Drive OAuth2 authentication
+- `scripts/google_drive_provider.py` — Google Drive storage provider
+- `templates/daily-template.md` — generic daily template
+- `templates/weekly-template.md` — generic weekly template
+- `tests/test_google_drive.py` — mocked integration tests
