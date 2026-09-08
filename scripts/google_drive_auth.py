@@ -6,8 +6,11 @@ in logs, reports, or the public repository.
 
 Usage:
     python scripts/google_drive_auth.py --check
-    python scripts/google_drive_auth.py --auth-url
+    python scripts/google_drive_auth.py          # full OAuth flow
     python scripts/google_drive_auth.py --test
+
+The --auth-url flag is deprecated. Use --check or run without arguments
+to start the full browser-based OAuth flow.
 """
 
 from __future__ import annotations
@@ -75,24 +78,14 @@ def get_credentials() -> Optional[Credentials]:
 
     flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
 
-    # Try to open browser with local server
+    # Run the full local-server OAuth flow
+    # This opens the browser, handles the redirect, and exchanges the code
     try:
-        auth_url = flow.authorization_url(access_type="offline")
-        webbrowser.open(auth_url)
-        print(f"\nBrowser opened for authorization.\n"
-              f"If it didn't open, visit this URL:\n{auth_url}\n")
-        creds = flow.run_local_server(port=0)
-        save_token(creds)
-        return creds
-    except Exception:
-        pass
-
-    # Fallback: prompt for manual code
-    code = input("Enter the authorization code: ").strip()
-    try:
-        flow_obj = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-        flow_obj.fetch_token(code=code)
-        creds = flow_obj.credentials
+        creds = flow.run_local_server(
+            access_type="offline",
+            prompt="consent",
+            port=0,
+        )
         save_token(creds)
         return creds
     except Exception as e:
@@ -175,13 +168,6 @@ def main():
         else:
             sys.exit(1)
 
-    elif "--auth-url" in sys.argv:
-        if not check_credentials():
-            sys.exit(1)
-        flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-        auth_url = flow.authorization_url(access_type="offline")
-        print(auth_url)
-
     elif "--test" in sys.argv:
         result = test_authentication()
         if result["status"] == "success":
@@ -194,10 +180,39 @@ def main():
             sys.exit(1)
 
     else:
-        print("Usage:")
-        print("  python google_drive_auth.py --check")
-        print("  python google_drive_auth.py --auth-url")
-        print("  python google_drive_auth.py --test")
+        # Full OAuth flow: check credentials, run local server, test access
+        print("Internship Logbook — Google Drive Authentication")
+        print("=" * 50)
+
+        if not check_credentials():
+            sys.exit(1)
+
+        print("\nStarting OAuth flow...")
+        print("A browser window will open for you to authorize access.\n")
+
+        creds = get_credentials()
+        if not creds:
+            print("Authentication failed.")
+            sys.exit(1)
+
+        print("Authentication successful.")
+
+        # Test root folder access
+        root_folder_id = _get_root_folder_id()
+        if root_folder_id:
+            service = get_service()
+            if service:
+                try:
+                    folder = service.files().get(fileId=root_folder_id, fields="name,id").execute()
+                    folder_name = folder.get("name")
+                    folder_id = folder.get("id")
+                    print(f"Root folder accessible: {folder_name} ({folder_id})")
+                except Exception as e:
+                    print(f"Root folder error: {e}")
+            else:
+                print("Warning: Could not create Drive service for folder test")
+        else:
+            print("Warning: No root folder ID configured (set GOOGLE_DRIVE_ROOT_FOLDER_ID env var)")
 
 
 if __name__ == "__main__":
