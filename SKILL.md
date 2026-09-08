@@ -1,0 +1,267 @@
+---
+name: internship-logbook
+description: Turn short, informal daily notes into a structured, university-style internship/industrial-training logbook, and generate weekly reports from them. Use this whenever the user mentions an internship logbook, training logbook, practicum/OJT logbook, daily log, weekly report for their internship, or gives commands like /log, /review, or /weekly. Also trigger when the user pastes rough end-of-day notes (e.g. "today I worked on X, tested Y, bug in Z") and wants them turned into a proper logbook entry, even if they don't say the word "logbook" explicitly. This skill manages a repo of daily/weekly markdown files, keeps raw notes as the source of truth, computes the correct internship week from a configurable start date, and enforces strict no-fabrication rules so entries stay accurate.
+---
+
+# Internship Logbook
+
+Converts informal daily notes into professional logbook entries and weekly
+reports, for anyone doing an internship, industrial training, or practicum
+that requires a written logbook. The skill is generic — all personal and
+project-specific details live in two places the user fills in themselves:
+
+- `AGENTS.md` — stable facts: who the user is, their internship timeline,
+  and their real project details. Read every session.
+- `projects/*.md` — optional, for splitting project context out of
+  `AGENTS.md` once it gets long
+
+This `SKILL.md` is the procedure — it stays generic and loads only when
+doing logbook work. Never hardcode a specific person's name, university,
+or project names into it. If the user asks to "add support for" a new
+project or detail, that goes into their `AGENTS.md` or `projects/`
+folder, not here.
+
+## Why this exists
+
+Writing a logbook entry every day is tedious, and most of the tedium is
+formatting and phrasing — not the underlying work, which the user already
+knows. The goal is to remove that friction while keeping the record
+honest: every entry must be traceable back to something the user actually
+said. Read section "Accuracy is non-negotiable" before generating anything.
+
+## First-time setup
+
+If the repo doesn't yet have an `AGENTS.md` at its root, walk the user
+through creating one from `assets/AGENTS-template.md` before doing
+anything else. `AGENTS.md` holds stable facts and expectations (read
+every session); this `SKILL.md` holds the procedure (loaded when doing
+logbook work) — keep the two separate rather than merging one into the
+other. Ask for:
+
+1. Name and role (e.g. "Software Engineering Intern")
+2. Institution / program name
+3. Internship start date and which weekdays count as working days
+   (default: Mon–Fri)
+4. Default hours per working day (default: 8)
+5. Which daily template style they want — `simple` or `detailed` (see
+   `assets/daily-template-simple.md` and `assets/daily-template-detailed.md`)
+6. Whether they already have a repo structure (daily/, weeks/, projects/,
+   attachments/) or want you to create one — use the layout below if not.
+
+Save their answers into `AGENTS.md`. Don't ask again once it exists —
+read it at the start of every session that touches this skill.
+
+If the repo has no `projects/` files yet, that's fine — create the first
+one the first time the user mentions a project by name (see "Project
+files" below).
+
+## Repository layout
+
+```text
+<repo>/
+├── AGENTS.md              ← user identity + timeline (read every session)
+├── daily/
+│   └── YYYY-MM-DD.md       ← one canonical file per calendar date
+├── weeks/
+│   └── week-XX.md          ← one file per internship week
+├── projects/
+│   └── <project-name>.md   ← persistent context per project/workstream
+└── attachments/
+    └── week-XX/
+```
+
+If the user already has a different layout, adapt to it rather than
+forcing this one — the layout matters less than the rules below.
+
+## Core workflow
+
+1. User provides raw daily notes (any format — full sentences, bullet
+   fragments, one-liners; never make them reformat first).
+2. Determine the correct date (see "Determining the date").
+3. Determine the internship week from `AGENTS.md`'s start date (see
+   "Date-to-week calculation").
+4. Read the relevant `projects/*.md` file(s) for continuity — don't
+   generate a description of project work from scratch each time; build
+   on what's already recorded there.
+5. Create or update `daily/YYYY-MM-DD.md` (see "One date, one file").
+6. Update the touched `projects/*.md` file(s) with anything worth
+   remembering next time (current status, open issues, PR state).
+7. On request (or Friday, if the user has set up that convention),
+   generate the week's report.
+
+## Determining the date
+
+- Default to **today's actual date** for phrases like "add today's task",
+  "log today", "today I worked on...".
+- Only use a different date when the user is explicit about it: "add
+  this for Friday", "log this for 2026-09-04", "I forgot to log
+  yesterday". Recalculate the week from whatever date is actually used.
+- Never infer the date from a previous message or assume a new
+  conversation means a new day — always resolve it fresh from what the
+  user says plus the real calendar date.
+
+## Date-to-week calculation
+
+`AGENTS.md` stores an internship **start date** and **working days**
+(default Mon–Fri). Compute the week number from that:
+
+```
+week_number = floor((date - start_date) / 7 days) + 1
+```
+
+Week boundaries follow the working-day pattern from the start date, not
+calendar Mondays — if the user's internship starts on a Wednesday,
+Week 1 runs from that Wednesday through the following Tuesday (or
+whatever their working-day set implies). Show your work when it's not
+obvious, e.g. "That's Week 6 (started 3 Aug, so 7 Sep falls in the
+6th 7-day block)." If `AGENTS.md` has no start date yet, ask for it once
+and save it — don't guess.
+
+## One date, one file
+
+There is exactly one canonical daily file per calendar date:
+`daily/YYYY-MM-DD.md`.
+
+- **File doesn't exist** → create it from the user's chosen daily
+  template (`assets/daily-template-simple.md` or
+  `-detailed.md`), filled with the new information.
+- **File already exists** → open it, keep everything already there, and
+  merge the new information into the right sections. Never overwrite or
+  silently drop earlier content, and don't duplicate a fact that's
+  already recorded (e.g. if "tested login flow" is already listed,
+  don't add it again just because the user mentioned it again).
+- Raw notes are the source of truth: preserve every raw note the user
+  has given for that day, appending new ones rather than replacing old
+  ones.
+
+## Project files
+
+Each ongoing project/workstream gets `projects/<name>.md`. Use it to
+track, across the whole internship:
+
+- What the project is and common types of tasks on it
+- Current status of anything ongoing (e.g. a PR, a feature, a bug)
+- Known issues/areas already documented, so you don't re-describe the
+  same finding as if it were new
+- Any wording constraints specific to that project (e.g. "never say the
+  PR is merged unless the user confirms it")
+
+Update this file whenever a daily entry touches that project — this is
+what lets weekly progress read as a real progression ("Week 2: created
+initial test cases. Week 3: added more and ran functional testing.")
+instead of the same sentence repeated five times.
+
+If a project doesn't have a file yet, create one the first time the
+user mentions it, using whatever they've told you so far as the seed
+content.
+
+## Accuracy is non-negotiable
+
+This is the most important rule in the whole skill. A logbook is a
+factual record that a university or employer will read — inventing
+content, even to make an entry sound more complete, undermines the
+whole document and can cause real problems for the user.
+
+- Never invent work the user didn't describe: no new features, bugs,
+  meetings, deployments, merged PRs, or completed tasks that weren't
+  mentioned or previously confirmed.
+- Only describe a task as "Completed" if the notes say so. If the notes
+  say it's ongoing or waiting on something, use "In Progress", "Pending
+  Review", "Pending Merge", or "Blocked" instead.
+- Only include an "Issue" when one is stated or clearly implied by the
+  notes. If there genuinely isn't one, say so plainly ("No blocking
+  issue identified during this task") rather than inventing one to fill
+  the section.
+- If a generated description contains a claim the raw notes and project
+  file don't support, cut it or soften it rather than leave it in.
+- When in doubt about what actually happened, ask — don't fill the gap
+  with a plausible-sounding guess.
+
+## Turning notes into professional wording
+
+Vague notes can be rephrased more professionally, but the substance must
+stay the same. Elevate the phrasing, not the scope of the work.
+
+**Example**
+- Raw: `checked login filter, seemed fine`
+- Good: `Conducted functional testing of the login filtering feature to confirm it behaved as expected.`
+- Too far: `Redesigned and optimized the login filtering architecture.`
+
+See `references/writing-style.md` for the full tone guide (what reads as
+a competent intern's own writing vs. an AI-generated corporate report).
+
+## Weekly reports
+
+Before generating `weeks/week-XX.md`:
+
+1. Work out the week's date range from `AGENTS.md`.
+2. Check which of the expected daily files exist for that range.
+3. If any are missing, tell the user which dates are missing and ask for
+   the notes — never fabricate a missing day just to complete the week.
+4. Build the report only from verified daily files that actually fall
+   inside that week's date range (a Week 5 file must never absorb a
+   Week 6 entry or vice versa).
+
+Weekly report shape (adapt headers to the user's chosen working days):
+
+```markdown
+# Week XX
+
+## <Day 1>
+### Task Detail
+### Issue
+### Proposed Solution
+### Status
+### Total Hours
+
+---
+[repeat per working day]
+---
+
+# Weekly Summary
+[projects touched, overall progress, notable issues/limitations, skills
+gained — concise, not written like a marketing report]
+
+# Suggested Attachments
+1. ...
+```
+
+## Suggested attachments and sensitive info
+
+When suggesting evidence for a daily or weekly entry, pull ideas from
+what the relevant `projects/*.md` file lists as typical evidence for
+that project (screenshots, PRs, commits, spreadsheets, etc).
+
+Before suggesting any screenshot or file for submission, flag that the
+user should crop or mask anything sensitive first: names, emails, phone
+numbers, IDs, account info, credentials, or confidential company
+information. Never ask the user to paste or store actual passwords, API
+keys, or credentials anywhere in the logbook.
+
+## Commands
+
+These are natural-language trigger phrases, not slash commands —
+the skill's description matches against them when you describe
+your task in conversation. No actual `/log` or `/review`
+command exists; typing a bare slash gets "Unknown command."
+
+- **Log today's work** — give the agent rough notes like:
+  "log today's work: ...", "add today's task: ...", "today I worked on..."
+  The agent resolves the date and week, creates or updates
+  that day's file, updates the relevant project file(s), suggests attachments.
+- **Review today's entry** — ask "review today's entry" or
+  "check today's log". The agent re-checks the current day's
+  entry for accuracy, repetition, wording, missing info, wrong
+  status, unsupported claims, and consistency with the project
+  file. Reports and offers fixes.
+- **Weekly report** — ask "generate this week's report",
+  "give me the weekly report", or "do the weekly". The agent
+  runs the weekly-report workflow for the current (or specified) week.
+
+## Reference files
+
+- `assets/AGENTS-template.md` — template for a new user's AGENTS.md
+- `assets/daily-template-simple.md` / `assets/daily-template-detailed.md`
+  — the two supported daily entry formats
+- `assets/project-template.md` — template for a new `projects/<name>.md`
+- `references/writing-style.md` — tone guide and before/after examples
