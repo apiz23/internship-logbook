@@ -27,8 +27,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
-# Narrowest practical Google Drive scope
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+# Scope: full Drive access to read/write existing folders and files
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 # Path to the user's OAuth client secret
 CREDENTIALS_PATH = str(Path.home() / ".hermes" / "google_client_secret.json")
