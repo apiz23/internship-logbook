@@ -30,7 +30,7 @@ internship-logbook/
 ├── references/
 │   └── writing-style.md            ← tone guide + before/after examples
 ├── tests/
-│   └── test_google_drive.py        ← mocked integration tests
+│   ├── test_google_drive.py        ← mocked integration tests
 └── .gitignore                      ← excludes credentials and personal data
 ```
 
@@ -153,10 +153,18 @@ Markdown files are stored in your Google Drive folder.
 
 5. **Authorize**: Run the authentication script:
    ```bash
-   python scripts/google_drive_auth.py --check
+   python scripts/google_drive_auth.py
    ```
    This opens a browser for you to authorize the app. The token is
    saved to `~/.hermes/google_token.json`.
+
+   To verify authentication and folder access:
+   ```bash
+   STORAGE_PROVIDER=google_drive \
+   GOOGLE_DRIVE_ROOT_FOLDER_ID=<your-folder-id> \
+   PYTHONPATH=scripts \
+   python3 scripts/google_drive_auth.py --test
+   ```
 
 #### Enabling Google Drive
 
@@ -195,8 +203,8 @@ internship-logbook/
   from `.gitignore`.
 - **No hardcoded credentials**: The repository uses placeholder
   `YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID`.
-- **Narrow scope**: The OAuth token uses only `https://www.googleapis.com/auth/drive.file`
-  — the app can only access files it creates.
+- **Narrow scope**: The OAuth token uses only `https://www.googleapis.com/auth/drive`
+  — the app can access files within the configured root folder.
 - **Tokens are not logged**: No credentials or tokens are printed
   in logs, reports, or console output.
 
@@ -212,8 +220,8 @@ Anyone can configure their own Google Drive integration:
 1. Clone this repo
 2. Create a Google Cloud project with Drive API enabled
 3. Download `client_secret.json` and place at `~/.hermes/google_client_secret.json`
-4. Run `python scripts/google_drive_auth.py --check`
-5. Set `GOOGLE_DRIVE_ROOT_FOLDER_ID` to their own Drive folder ID
+4. Run `python scripts/google_drive_auth.py`
+5. Set `GOOGLE_DRIVE_ROOT_FOLDER_ID` to your own Drive folder ID
 6. The skill works the same for everyone — no source code changes needed
 
 ## License

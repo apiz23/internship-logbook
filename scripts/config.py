@@ -1,11 +1,15 @@
 """Configuration for the Internship Logbook storage providers.
 
 This module provides the configuration layer that allows the core
-Internship Logbook logic to work with either local storage or
-Google Drive storage without depending on either directly.
+Internship Logbook logic to work with local storage, Google Drive,
+or local Markdown storage without depending on any of them directly.
 
 User-specific configuration (credentials, folder IDs) lives in
 ~/.hermes/ and is never committed to any public repository.
+
+Environment variables:
+    STORAGE_PROVIDER        - "local" or "google_drive"
+    GOOGLE_DRIVE_ROOT_FOLDER_ID - Google Drive root folder ID
 """
 
 import os

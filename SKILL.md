@@ -84,7 +84,7 @@ The logbook supports two storage backends, configured via `scripts/config.py`:
 | Provider | Description | Configuration |
 |----------|-------------|---------------|
 | `local` | Markdown files in the repo (default) | No setup needed |
-| `google_drive` | Markdown files in Google Drive | Requires OAuth setup |
+| `google_drive` | Markdown files in Google Drive | OAuth setup required |
 
 ### Local storage (default)
 
@@ -92,17 +92,7 @@ Files are stored directly in the repository as Markdown. No authentication requi
 
 ### Google Drive storage
 
-Files are stored in a configured Google Drive folder. Requires:
-
-1. Google Cloud project with Drive API enabled
-2. OAuth 2.0 Desktop credentials (`client_secret.json`)
-3. `STORAGE_PROVIDER=google_drive` and `GOOGLE_DRIVE_ROOT_FOLDER_ID` set
-
-See the README for full setup instructions.
-
-The core logbook logic does NOT depend on Google Drive directly.
-All Drive operations go through `scripts/google_drive_provider.py`,
-which provides the same interface as local storage.
+See the README for setup instructions.
 
 ## Core workflow
 
@@ -296,9 +286,9 @@ command exists; typing a bare slash gets "Unknown command."
   — the two supported daily entry formats
 - `assets/project-template.md` — template for a new `projects/<name>.md`
 - `references/writing-style.md` — tone guide and before/after examples
-- `scripts/config.py` — storage provider configuration
+- `scripts/config.py` — storage provider configuration (local / google_drive)
 - `scripts/google_drive_auth.py` — Google Drive OAuth2 authentication
 - `scripts/google_drive_provider.py` — Google Drive storage provider
 - `templates/daily-template.md` — generic daily template
 - `templates/weekly-template.md` — generic weekly template
-- `tests/test_google_drive.py` — mocked integration tests
+- `tests/test_google_drive.py` — mocked integration tests (no real credentials needed)

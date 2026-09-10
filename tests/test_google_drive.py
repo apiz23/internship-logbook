@@ -240,6 +240,39 @@ class TestMarkdownOperations:
             assert len(parts[2]) == 2  # month (zero-padded)
             assert len(parts[3]) == 13  # YYYY-MM-DD.md
 
+    def test_sync_does_not_create_duplicate_on_second_pass(self):
+        """Re-syncing an existing file should not create a duplicate."""
+        from google_drive_sync import GoogleDriveSync
+
+        config = StorageConfig(
+            provider="google_drive",
+            google_drive=GoogleDriveConfig(enabled=True),
+        )
+        provider = GoogleDriveProvider(config)
+
+        mock_service = MagicMock()
+        mock_service.files().list().execute.return_value = {
+            "files": [{"id": "file_123", "name": "2026-09-08.md"}]
+        }
+        provider.service = mock_service
+        provider.root_folder_id = "root_123"
+        provider._initialized = True
+
+        content = "# Test"
+        sync = GoogleDriveSync(provider)
+
+        with patch.object(
+            sync,
+            "_existing_drive_content",
+            return_value=content,
+        ):
+            first = sync.sync_file("daily/2026/09/2026-09-08.md", content)
+            second = sync.sync_file("daily/2026/09/2026-09-08.md", content)
+
+        assert first == "unchanged"
+        assert second == "unchanged"
+        assert provider.service.files().create.call_count == 0
+
 
 class TestLocalStorageFallback:
     """Test that local storage works without Google Drive."""

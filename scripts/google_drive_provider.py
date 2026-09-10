@@ -26,8 +26,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from google.oauth2.credentials import Credentials
 
-from scripts.config import StorageConfig, get_config
-from scripts.google_drive_auth import get_service
+from config import StorageConfig, get_config
+from google_drive_auth import get_service
 
 
 class GoogleDriveProvider:
