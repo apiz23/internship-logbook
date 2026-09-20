@@ -27,7 +27,16 @@ from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from google.oauth2.credentials import Credentials
 
 from config import StorageConfig, get_config
-from google_drive_auth import get_service
+from google_drive_auth import build_drive_service
+
+
+def get_service():
+    """Backwards-compatible wrapper for build_drive_service().
+
+    Returns a Google Drive API service object, or None.
+    """
+    service, _ = build_drive_service()
+    return service
 
 
 class GoogleDriveProvider:
@@ -61,7 +70,7 @@ class GoogleDriveProvider:
             or self.config.google_drive.root_folder_id
         )
 
-        if self.root_folder_id == "YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID":
+        if not self.root_folder_id:
             return False
 
         # Verify root folder exists

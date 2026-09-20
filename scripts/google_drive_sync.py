@@ -18,7 +18,7 @@ Sync rules:
 - Drive files are not deleted merely because a local file was deleted.
 
 Usage:
-    from scripts.google_drive_sync import sync_local_paths, GoogleDriveSync
+    from google_drive_sync import sync_local_paths, GoogleDriveSync
     summary = sync_local_paths(["daily/2026-09-09.md"])
     print(summary)
 """

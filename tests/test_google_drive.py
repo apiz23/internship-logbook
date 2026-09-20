@@ -33,10 +33,11 @@ class TestConfig:
         assert not config.is_google_drive()
 
     def test_google_drive_disabled_by_default(self):
-        """Google Drive should be disabled by default."""
-        config = StorageConfig()
-        assert config.google_drive.enabled is False
-        assert config.google_drive.root_folder_id == "YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID"
+            """Google Drive should be disabled by default."""
+            from config import StorageConfig
+            config = StorageConfig()
+            assert config.google_drive.enabled is False
+            assert config.google_drive.root_folder_id == ""
 
     def test_google_drive_enabled(self):
         """Test enabling Google Drive provider."""

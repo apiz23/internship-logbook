@@ -17,8 +17,10 @@ internship-logbook/
 ├── AGENTS.md                         ← user identity + timeline (local)
 ├── scripts/
 │   ├── config.py                     ← storage configuration
-│   ├── google_drive_auth.py          ← OAuth2 authentication
-│   └── google_drive_provider.py      ← Google Drive storage provider
+│   ├── google_drive_auth.py          ← OAuth2 authentication (Hermes-native)
+│   ├── google_drive_provider.py      ← Google Drive storage provider
+│   ├── google_drive_sync.py          ← Google Drive sync
+│   └── setup_google_drive.py         ← setup wizard (new!)
 ├── assets/
 │   ├── AGENTS-template.md          ← fill this in once, for yourself
 │   ├── daily-template-simple.md    ← lightweight daily entry format
@@ -30,8 +32,9 @@ internship-logbook/
 ├── references/
 │   └── writing-style.md            ← tone guide + before/after examples
 ├── tests/
-│   ├── test_google_drive.py        ← mocked integration tests
-└── .gitignore                      ← excludes credentials and personal data
+│   └── test_google_drive.py        ← mocked integration tests
+├── .env.example                      ← environment variable template
+└── .gitignore                        ← excludes credentials and personal data
 ```
 
 Nothing in here is specific to any one person, university, or job —
@@ -117,6 +120,165 @@ Adjust `AGENTS.md`'s "Notes" field and your `projects/*.md` files for
 whatever your actual work is (data analysis, design, marketing, lab
 research, etc.) — you shouldn't need to touch `SKILL.md` itself.
 
+## Google Drive Authentication
+
+The Internship Logbook supports Google Drive storage via Hermes' native
+Google Workspace OAuth flow. Each user authenticates their own Google
+account — no shared credentials, no hardcoded tokens.
+
+### Prerequisites
+
+1. **Hermes Agent** installed and available on your PATH:
+   ```bash
+   hermes --version
+   ```
+   If not installed: https://hermes-agent.nousresearch.com/docs/
+
+2. **Google Cloud Project** with the Google Drive API enabled:
+   - Go to [console.cloud.google.com](https://console.cloud.google.com)
+   - Create a project (or use an existing one)
+   - Enable the **Google Drive API** in the API Library
+
+3. **OAuth 2.0 Client ID** (Desktop app type):
+   - Go to [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
+   - Credentials → Create Credentials → OAuth 2.0 Client ID
+   - Application type: **Desktop app**
+   - Download the JSON file
+
+### Setup (one command)
+
+After cloning the repo:
+
+```bash
+git clone <repo-url>
+cd internship-logbook
+
+# Place your client_secret.json at ~/.hermes/google_client_secret.json
+# (or anywhere — the setup script will prompt you)
+
+python scripts/setup_google_drive.py
+```
+
+The setup script will:
+1. Detect if Hermes and the Google Workspace skill are installed
+2. Walk you through OAuth authorization (opens a browser)
+3. Save your token to `~/.hermes/google_token.json`
+4. Verify Drive API access with a test call
+
+### Manual setup (if Hermes Google Workspace is not available)
+
+If Hermes' Google Workspace skill is not installed, the setup script
+falls back to a standard Google OAuth flow:
+
+```bash
+# 1. Place client_secret.json at ~/.hermes/google_client_secret.json
+python scripts/setup_google_drive.py
+
+# Or manually:
+# 2. Get authorization URL
+python ${HERMES_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/scripts/setup.py --auth-url --services drive --format json
+
+# 3. Visit the URL, authorize, paste the redirect URL back
+# 4. Verify
+python scripts/setup_google_drive.py --check
+```
+
+### Enable Google Drive storage
+
+Set the environment variables:
+
+**macOS / Linux:**
+```bash
+export STORAGE_PROVIDER=google_drive
+export GOOGLE_DRIVE_ROOT_FOLDER_ID=YOUR_GOOGLE_DRIVE_FOLDER_ID
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:STORAGE_PROVIDER="google_drive"
+$env:GOOGLE_DRIVE_ROOT_FOLDER_ID="YOUR_GOOGLE_DRIVE_FOLDER_ID"
+```
+
+Or create `scripts/config.json`:
+```json
+{
+  "provider": "google_drive",
+  "google_drive": {
+    "enabled": true,
+    "root_folder_id": "YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID"
+  }
+}
+```
+
+### How another developer authenticates their own account
+
+Each developer follows the same steps with **their own** Google account:
+
+1. Create their own Google Cloud project
+2. Enable the Drive API in their own project
+3. Create their own OAuth 2.0 Desktop client credentials
+4. Download `client_secret.json` and place it at `~/.hermes/google_client_secret.json`
+5. Run `python scripts/setup_google_drive.py`
+6. Authorize in the browser (their own Google account)
+7. The token is saved to their own `~/.hermes/google_token.json`
+
+No repository files are modified. No shared credentials.
+
+### What must NEVER be committed to Git
+
+The following are **user-specific secrets** and must never be committed:
+
+- `~/.hermes/google_client_secret.json` — OAuth client credentials
+- `~/.hermes/google_token.json` — OAuth access/refresh tokens
+- `token.json` — any OAuth token file
+- `*.token.json` — token files
+- `.env` — environment variables with secrets
+- `scripts/config.json` — if it contains real folder IDs
+
+The `.gitignore` already excludes these. Verify with:
+```bash
+git status
+```
+
+### Where credentials are stored
+
+| File | Purpose | Location |
+|------|---------|----------|
+| `google_client_secret.json` | OAuth client credentials (one-time download) | `~/.hermes/` |
+| `google_token.json` | OAuth access + refresh tokens (auto-refreshed) | `~/.hermes/` |
+
+Both paths respect the `HERMES_HOME` environment variable if set.
+
+### Getting your Google Drive folder ID
+
+1. Open Google Drive in a browser
+2. Navigate to the folder where you want logbook files stored
+3. Copy the folder ID from the URL:
+   ```
+   https://drive.google.com/drive/folders/FOLDER_ID_HERE
+   ```
+4. Set it as `GOOGLE_DRIVE_ROOT_FOLDER_ID`
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `Hermes Google Workspace skill was not found` | Install Hermes and the google-workspace skill, or use the manual OAuth fallback |
+| `No token file found` | Run `python scripts/setup_google_drive.py` |
+| `Token expired` | Re-run the setup script; tokens auto-refresh if a refresh token exists |
+| `Auth verification failed` | Make sure the Drive API is enabled in your Google Cloud project |
+| `Invalid credentials` | Delete `~/.hermes/google_token.json` and re-run setup |
+| `Access Not Configured` | Enable Google Drive API in your Google Cloud Console |
+| `HttpError 403` | Re-authorize with Drive scope: run setup script again |
+
+### Security
+
+- Credentials are stored in `~/.hermes/` (user home), **never** in the repo
+- OAuth tokens are automatically refreshed — no manual token management
+- The app uses the narrow `https://www.googleapis.com/auth/drive` scope only
+- No credentials, tokens, or secrets are printed in logs or console output
+- If you suspect a token is compromised, delete `~/.hermes/google_token.json` and re-run setup
+
 ## Storage Providers
 
 The Internship Logbook supports two storage backends:
@@ -132,58 +294,7 @@ No configuration needed — this is the default.
 
 ### Google Drive Storage
 
-Markdown files are stored in your Google Drive folder.
-
-#### Prerequisites
-
-1. **Google Cloud Project**: Create a project at
-   [console.cloud.google.com](https://console.cloud.google.com).
-
-2. **Enable Google Drive API**: In the API Library, enable the
-   Google Drive API.
-
-3. **Create OAuth Credentials**: Go to Credentials → Create Credentials
-   → OAuth 2.0 Client ID → Desktop app. Download the
-   `client_secret.json` file.
-
-4. **Place credentials**: Put `client_secret.json` at:
-   ```
-   ~/.hermes/google_client_secret.json
-   ```
-
-5. **Authorize**: Run the authentication script:
-   ```bash
-   python scripts/google_drive_auth.py
-   ```
-   This opens a browser for you to authorize the app. The token is
-   saved to `~/.hermes/google_token.json`.
-
-   To verify authentication and folder access:
-   ```bash
-   STORAGE_PROVIDER=google_drive \
-   GOOGLE_DRIVE_ROOT_FOLDER_ID=<your-folder-id> \
-   PYTHONPATH=scripts \
-   python3 scripts/google_drive_auth.py --test
-   ```
-
-#### Enabling Google Drive
-
-Set the `STORAGE_PROVIDER` environment variable:
-```bash
-export STORAGE_PROVIDER=google_drive
-export GOOGLE_DRIVE_ROOT_FOLDER_ID=YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID
-```
-
-Or create a `scripts/config.json`:
-```json
-{
-  "provider": "google_drive",
-  "google_drive": {
-    "enabled": true,
-    "root_folder_id": "YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID"
-  }
-}
-```
+Markdown files are stored in your Google Drive folder (configured as above).
 
 #### Folder Structure
 
@@ -195,18 +306,6 @@ internship-logbook/
 ├── monthly/YYYY/YYYY-MM.md
 └── templates/
 ```
-
-#### Security
-
-- **Credentials never leave your machine**: `google_client_secret.json`
-  and `google_token.json` are stored at `~/.hermes/` and are excluded
-  from `.gitignore`.
-- **No hardcoded credentials**: The repository uses placeholder
-  `YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID`.
-- **Narrow scope**: The OAuth token uses only `https://www.googleapis.com/auth/drive`
-  — the app can access files within the configured root folder.
-- **Tokens are not logged**: No credentials or tokens are printed
-  in logs, reports, or console output.
 
 #### Disabling Google Drive
 
@@ -220,7 +319,7 @@ Anyone can configure their own Google Drive integration:
 1. Clone this repo
 2. Create a Google Cloud project with Drive API enabled
 3. Download `client_secret.json` and place at `~/.hermes/google_client_secret.json`
-4. Run `python scripts/google_drive_auth.py`
+4. Run `python scripts/setup_google_drive.py`
 5. Set `GOOGLE_DRIVE_ROOT_FOLDER_ID` to your own Drive folder ID
 6. The skill works the same for everyone — no source code changes needed
 

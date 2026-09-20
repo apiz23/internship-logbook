@@ -10,6 +10,11 @@ User-specific configuration (credentials, folder IDs) lives in
 Environment variables:
     STORAGE_PROVIDER        - "local" or "google_drive"
     GOOGLE_DRIVE_ROOT_FOLDER_ID - Google Drive root folder ID
+    HERMES_HOME             - Hermes home directory (default: ~/.hermes)
+
+Hermes Google Workspace integration:
+    If Hermes Google Workspace skill is installed, its OAuth token
+    at ~/.hermes/google_token.json is discovered and used automatically.
 """
 
 import os
@@ -28,19 +33,18 @@ class GoogleDriveConfig:
     """
 
     enabled: bool = False
-    root_folder_id: str = "YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID"
+    root_folder_id: str = ""
     credentials_path: str = ""  # Defaults to ~/.hermes/google_client_secret.json
     token_path: str = ""        # Defaults to ~/.hermes/google_token.json
 
     def __post_init__(self):
+        hermes_home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
         if not self.credentials_path:
-            self.credentials_path = str(
-                Path.home() / ".hermes" / "google_client_secret.json"
-            )
+            self.credentials_path = str(hermes_home / "google_client_secret.json")
         if not self.token_path:
-            self.token_path = str(
-                Path.home() / ".hermes" / "google_token.json"
-            )
+            self.token_path = str(hermes_home / "google_token.json")
+        if not self.root_folder_id:
+            self.root_folder_id = os.environ.get("GOOGLE_DRIVE_ROOT_FOLDER_ID", "")
 
 
 @dataclass
@@ -78,7 +82,7 @@ class StorageConfig:
             google_drive=GoogleDriveConfig(
                 enabled=data.get("google_drive", {}).get("enabled", False),
                 root_folder_id=data.get("google_drive", {}).get(
-                    "root_folder_id", "YOUR_GOOGLE_DRIVE_ROOT_FOLDER_ID"
+                    "root_folder_id", ""
                 ),
                 credentials_path=data.get("google_drive", {}).get(
                     "credentials_path", ""

@@ -9,6 +9,7 @@ attachments/
 # Google Drive credentials — NEVER commit these
 google_client_secret.json
 google_token.json
+token.json
 *.token.json
 scripts/config.json
 scripts/__pycache__/
@@ -17,3 +18,25 @@ tests/__pycache__/
 # Hermes personal credentials
 .hermes/google_client_secret.json
 .hermes/google_token.json
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

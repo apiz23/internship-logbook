@@ -1,6 +1,49 @@
 ---
 name: internship-logbook
-description: Turn short, informal daily notes into a structured, university-style internship/industrial-training logbook, and generate weekly reports from them. Use this whenever the user mentions an internship logbook, training logbook, practicum/OJT logbook, daily log, weekly report for their internship, or gives commands like /log, /review, or /weekly. Also trigger when the user pastes rough end-of-day notes (e.g. "today I worked on X, tested Y, bug in Z") and wants them turned into a proper logbook entry, even if they don't say the word "logbook" explicitly. This skill manages a repo of daily/weekly markdown files, keeps raw notes as the source of truth, computes the correct internship week from a configurable start date, and enforces strict no-fabrication rules so entries stay accurate.
+description: Turn short, informal daily notes into a structured, university-style internship/industrial-training logbook, and generate weekly reports from them. Triggers when the user mentions an internship logbook, training logbook, practicum/OJT logbook, daily log, weekly report, or gives commands like /log, /review, /weekly. Also triggers when the user pastes rough end-of-day notes and wants them turned into a proper logbook entry.
+version: 1.0.0
+author: Hermes Community
+license: MIT
+platforms: [macos, linux, windows]
+metadata:
+  hermes:
+    tags: [productivity, logbook, internship, weekly-report]
+    related_skills: []
+    config:
+      - key: internship.start_date
+        description: "Internship start date (YYYY-MM-DD, first official working day)"
+        default: ""
+        prompt: "Enter your internship start date (YYYY-MM-DD)"
+      - key: internship.working_days
+        description: "Which weekdays count as working days"
+        default: "mon-fri"
+        prompt: "Enter working days (e.g., mon-fri, mon-sat)"
+      - key: internship.hours_per_day
+        description: "Default hours per working day"
+        default: "8"
+        prompt: "Enter default hours per working day"
+      - key: internship.daily_template
+        description: "Daily entry template style"
+        default: "simple"
+        prompt: "Choose daily template style (simple or detailed)"
+      - key: internship.weekly_report_timing
+        description: "When to generate weekly reports"
+        default: "manual"
+        prompt: "Weekly report timing (manual on request, or automatic every Friday)"
+required_environment_variables:
+  - name: STORAGE_PROVIDER
+    prompt: "Storage provider (local or google_drive)"
+    help: "Set to 'google_drive' to use Google Drive, or 'local' for local Markdown files"
+    required_for: "Choosing Google Drive as storage backend"
+  - name: GOOGLE_DRIVE_ROOT_FOLDER_ID
+    prompt: "Google Drive root folder ID"
+    help: "The Google Drive folder ID where logbook files will be stored"
+    required_for: "Google Drive storage functionality"
+required_credential_files:
+  - path: google_client_secret.json
+    description: "Google OAuth2 client secret (created by Google Cloud Console)"
+  - path: google_token.json
+    description: "Google OAuth2 access token (created by running google_drive_auth.py)"
 ---
 
 # Internship Logbook
@@ -21,15 +64,28 @@ or project names into it. If the user asks to "add support for" a new
 project or detail, that goes into their `AGENTS.md` or `projects/`
 folder, not here.
 
-## Why this exists
+## When to Use
 
-Writing a logbook entry every day is tedious, and most of the tedium is
-formatting and phrasing — not the underlying work, which the user already
-knows. The goal is to remove that friction while keeping the record
-honest: every entry must be traceable back to something the user actually
-said. Read section "Accuracy is non-negotiable" before generating anything.
+Load this skill whenever the user mentions any of the following:
 
-## First-time setup
+- "internship logbook", "training logbook", "practicum logbook", "OJT logbook"
+- "daily log", "log today's work", "add today's task"
+- "weekly report", "generate this week's report", "do the weekly"
+- Review commands: "review today's entry", "check today's log"
+- Rough end-of-day notes like "today I worked on X, tested Y, bug in Z"
+  (even without saying "logbook" explicitly)
+
+## Quick Reference
+
+| Action | Trigger phrase | Output |
+|--------|---------------|--------|
+| Log today's work | "log today's work", "add today's task", "today I worked on..." | Creates/updates `daily/YYYY-MM-DD.md` |
+| Review today's entry | "review today's entry", "check today's log" | Checks accuracy, wording, consistency |
+| Weekly report | "generate this week's report", "do the weekly" | Creates/updates `weeks/week-XX.md` |
+
+## Procedure
+
+### First-time setup
 
 If the repo doesn't yet have an `AGENTS.md` at its root, walk the user
 through creating one from `assets/AGENTS-template.md` before doing
@@ -55,7 +111,7 @@ If the repo has no `projects/` files yet, that's fine — create the first
 one the first time the user mentions a project by name (see "Project
 files" below).
 
-## Repository layout
+### Repository layout
 
 ```text
 <repo>/
@@ -77,7 +133,7 @@ files" below).
 If the user already has a different layout, adapt to it rather than
 forcing this one — the layout matters less than the rules below.
 
-## Storage providers
+### Storage providers
 
 The logbook supports two storage backends, configured via `scripts/config.py`:
 
@@ -86,15 +142,11 @@ The logbook supports two storage backends, configured via `scripts/config.py`:
 | `local` | Markdown files in the repo (default) | No setup needed |
 | `google_drive` | Markdown files in Google Drive | OAuth setup required |
 
-### Local storage (default)
+**Local storage (default):** Files are stored directly in the repository as Markdown. No authentication required.
 
-Files are stored directly in the repository as Markdown. No authentication required.
+**Google Drive storage:** Requires OAuth2 setup. See the README for setup instructions. The skill declares `required_credential_files` for `google_client_secret.json` and `google_token.json` (stored at `~/.hermes/`), plus `required_environment_variables` for `STORAGE_PROVIDER` and `GOOGLE_DRIVE_ROOT_FOLDER_ID`.
 
-### Google Drive storage
-
-See the README for setup instructions.
-
-## Core workflow
+### Core workflow
 
 1. User provides raw daily notes (any format — full sentences, bullet
    fragments, one-liners; never make them reformat first).
@@ -110,7 +162,7 @@ See the README for setup instructions.
 7. On request (or Friday, if the user has set up that convention),
    generate the week's report.
 
-## Determining the date
+### Determining the date
 
 - Default to **today's actual date** for phrases like "add today's task",
   "log today", "today I worked on...".
@@ -121,7 +173,7 @@ See the README for setup instructions.
   conversation means a new day — always resolve it fresh from what the
   user says plus the real calendar date.
 
-## Date-to-week calculation
+### Date-to-week calculation
 
 `AGENTS.md` stores an internship **start date** and **working days**
 (default Mon–Fri). Compute the week number from that:
@@ -138,7 +190,7 @@ obvious, e.g. "That's Week 6 (started 3 Aug, so 7 Sep falls in the
 6th 7-day block)." If `AGENTS.md` has no start date yet, ask for it once
 and save it — don't guess.
 
-## One date, one file
+### One date, one file
 
 There is exactly one canonical daily file per calendar date:
 `daily/YYYY-MM-DD.md`.
@@ -155,7 +207,7 @@ There is exactly one canonical daily file per calendar date:
   has given for that day, appending new ones rather than replacing old
   ones.
 
-## Project files
+### Project files
 
 Each ongoing project/workstream gets `projects/<name>.md`. Use it to
 track, across the whole internship:
@@ -176,7 +228,7 @@ If a project doesn't have a file yet, create one the first time the
 user mentions it, using whatever they've told you so far as the seed
 content.
 
-## Accuracy is non-negotiable
+### Accuracy is non-negotiable
 
 This is the most important rule in the whole skill. A logbook is a
 factual record that a university or employer will read — inventing
@@ -198,7 +250,7 @@ whole document and can cause real problems for the user.
 - When in doubt about what actually happened, ask — don't fill the gap
   with a plausible-sounding guess.
 
-## Turning notes into professional wording
+### Turning notes into professional wording
 
 Vague notes can be rephrased more professionally, but the substance must
 stay the same. Elevate the phrasing, not the scope of the work.
@@ -211,7 +263,7 @@ stay the same. Elevate the phrasing, not the scope of the work.
 See `references/writing-style.md` for the full tone guide (what reads as
 a competent intern's own writing vs. an AI-generated corporate report).
 
-## Weekly reports
+### Weekly reports
 
 Before generating `weeks/week-XX.md`:
 
@@ -247,7 +299,7 @@ gained — concise, not written like a marketing report]
 1. ...
 ```
 
-## Suggested attachments and sensitive info
+### Suggested attachments and sensitive info
 
 When suggesting evidence for a daily or weekly entry, pull ideas from
 what the relevant `projects/*.md` file lists as typical evidence for
@@ -278,6 +330,61 @@ command exists; typing a bare slash gets "Unknown command."
 - **Weekly report** — ask "generate this week's report",
   "give me the weekly report", or "do the weekly". The agent
   runs the weekly-report workflow for the current (or specified) week.
+
+## Pitfalls
+
+1. **Don't invent dates.** Always resolve the date fresh from what the
+   user says plus the real calendar date. Never infer from a previous
+   message or assume a new conversation means a new day.
+
+2. **Don't overwrite existing daily files.** When `daily/YYYY-MM-DD.md`
+   already exists, merge new information into it — never replace it.
+
+3. **Don't fabricate missing days.** If a weekly report is missing daily
+   files for some dates, tell the user which dates are missing and ask
+   for the notes. Never fill in a day that doesn't have data.
+
+4. **Don't exaggerate scope.** Vague notes get cleaned up for wording,
+   not inflated in scope. "Checked a filter still worked" → "Conducted
+   functional testing..." not "Redesigned the architecture."
+
+5. **Google Drive credentials are user-specific.** The `client_secret.json`
+   and `token.json` files live at `~/.hermes/` and are excluded from
+   `.gitignore` for this reason — never commit them.
+
+6. **Week boundaries follow working days, not calendar Mondays.** If the
+   internship starts on a Wednesday, Week 1 runs Wednesday–Tuesday, not
+   the calendar week. Recalculate from the actual start date.
+
+7. **Don't hardcode person-specific info in SKILL.md.** The skill is
+   generic — personal details belong in `AGENTS.md` or `projects/*.md`,
+   not in the procedure file.
+
+## Verification
+
+After logging daily notes, verify:
+
+1. **File created/updated:** `daily/YYYY-MM-DD.md` exists and contains
+   the user's raw notes verbatim (preserved in the Raw Notes section).
+2. **Date and week correct:** The date matches what the user asked for
+   (defaulting to today), and the week number is consistent with
+   `AGENTS.md`'s start date.
+3. **Project files updated:** Any project mentioned in the notes has
+   its `projects/<name>.md` updated with current status.
+4. **No fabrication:** Every claim in the entry is traceable to the
+   user's raw notes or a previous project file. Status labels match
+   the actual progress (Completed / In Progress / Pending Review /
+   Pending Merge / Blocked).
+5. **No sensitive data in logbook:** The entry doesn't contain passwords,
+   API keys, or credentials the user shouldn't be storing in the repo.
+
+After generating a weekly report, verify:
+
+6. **All days present:** Every working day in the week's date range
+   has a corresponding daily file, or the missing dates are explicitly
+   flagged to the user.
+7. **No cross-week contamination:** The report only draws from daily
+   files that actually fall inside that week's date range.
 
 ## Reference files
 
