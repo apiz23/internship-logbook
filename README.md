@@ -42,22 +42,36 @@ personal and project details live in files *you* create locally
 (`AGENTS.md` and `projects/*.md`), which are never committed with
 someone else's info in them.
 
-## Quick start
+## Install
 
-1. **Clone or download this repo** (or just copy the files into your
-   internship notes repo).
-2. Copy `assets/AGENTS-template.md` → `AGENTS.md` at the repo root, and
-   fill in your name, institution, internship start date, working days,
-   and which daily template style you want.
-3. Create a `daily/`, `weeks/`, `projects/`, and `attachments/` folder
-   (or let your agent create them the first time you use it — see
-   `SKILL.md`'s "Repository layout" section).
-4. Start logging: give the agent your rough end-of-day notes and it
-   creates/updates `daily/YYYY-MM-DD.md` for you, working out the date
-   and internship week automatically from `AGENTS.md`.
-5. Ask for a weekly report whenever you want one — it's built only from
-   verified daily files, and it'll tell you if a day is missing instead
-   of making one up.
+### Option A — Hermes (recommended)
+
+1. Clone the repo:
+   ```bash
+   git clone <repo-url>
+   cd internship-logbook
+   ```
+2. Install the skill into Hermes:
+   ```bash
+   cp -r skills/internship-logbook ~/.hermes/skills/personal/
+   ```
+3. Set up your repo:
+   ```bash
+   cp skills/internship-logbook/assets/AGENTS-template.md AGENTS.md
+   # Edit AGENTS.md with your name, institution, start date, etc.
+   mkdir -p daily weeks projects attachments
+   ```
+4. Enable Google Drive (optional) — see [Google Drive Authentication](#google-drive-authentication) below.
+5. Start logging: give the agent your rough end-of-day notes and it
+   creates/updates `daily/YYYY-MM-DD.md` for you automatically.
+
+### Option B — Manual (any agent)
+
+1. Clone the repo.
+2. Copy `SKILL.md` and the `assets/` files into your agent's skill directory (or paste `SKILL.md` into your agent's instructions).
+3. Fill in `AGENTS.md` from `assets/AGENTS-template.md`.
+4. Create `daily/`, `weeks/`, `projects/`, `attachments/` folders.
+5. Give the agent your rough notes — it handles the rest.
 
 ### Skill triggering
 
