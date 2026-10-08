@@ -77,7 +77,22 @@ class GoogleDriveSync:
         path = local_path.strip().lstrip("/").lstrip("\\")
         if not path:
             raise ValueError("Empty local path")
-        return path.replace("\\", "/")
+        # Normalize: resolve .. and . components to prevent path traversal
+        parts = path.replace("\\", "/").split("/")
+        normalized = []
+        for part in parts:
+            if part == "." or part == "":
+                continue
+            if part == "..":
+                if normalized and normalized[-1] != "..":
+                    normalized.pop()
+                # If nothing to pop, skip (anchored to root)
+                continue
+            normalized.append(part)
+        path = "/".join(normalized)
+        if not path:
+            raise ValueError("Empty local path after normalization")
+        return path
 
     def _ensure_parent_folder(self, drive_path: str) -> Optional[str]:
         """Ensure all folders in drive_path exist under the root and return the leaf parent ID."""
