@@ -23,8 +23,9 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
-from google.auth.credentials import Credentials
-from google.oauth2.credentials import Credentials as UserCredentials
+from requests import Request
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 # ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 # ---------------------------------------------------------------------------
 
 _HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+
 
 def _get_hermes_home() -> Path:
     """Return the Hermes home directory, resolved at call time."""
@@ -49,6 +51,7 @@ def _default_token_path() -> Path:
 
 def _default_client_secret_path() -> Path:
     return _get_hermes_home() / "google_client_secret.json"
+
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -96,21 +99,27 @@ def hermes_workspace_available() -> bool:
 # Token validation
 # ---------------------------------------------------------------------------
 
-def token_is_valid(token_path: Path = None) -> bool:
-    """Return True if a valid (non-expired) token exists at the given path."""
-    if token_path is None:
-        token_path = _default_token_path()
+def _is_token_file_corrupt(token_path: Path) -> bool:
+    """Return True if the token file is empty or not valid JSON."""
+    if not token_path.is_file():
+        return True
+    if token_path.stat().st_size == 0:
+        return True
     try:
         with open(token_path) as f:
-            data = json.load(f)
-        creds = UserCredentials.from_authorized_user_info(data, SCOPES)
-        return creds.valid or (creds.expired and creds.refresh_token is not None)
-    except Exception:
+            json.load(f)
         return False
+    except Exception:
+        return True
 
 
 def load_credentials(token_path: Path = None) -> Optional[Credentials]:
     """Load credentials from the token file, refreshing if needed.
+
+    Handles the standard case (token exists but expired with a
+    refresh token -> refresh + persist) and the corruption case
+    (0-byte token file, e.g. from a failed write) by returning None
+    so the caller can guide the user through re-authentication.
 
     Returns None if no valid credentials can be obtained.
     Never prints or logs the token contents.
@@ -118,26 +127,60 @@ def load_credentials(token_path: Path = None) -> Optional[Credentials]:
     if token_path is None:
         token_path = _default_token_path()
 
+    # Corrupted/missing token file: cannot salvage. Caller should
+    # attempt re-authentication (e.g. run Hermes setup again).
+    if not token_path.is_file() or token_path.stat().st_size == 0:
+        return None
+
     try:
         with open(token_path) as f:
             data = json.load(f)
-        creds = UserCredentials.from_authorized_user_info(data, SCOPES)
-
-        if creds.valid:
-            return creds
-
-        if creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                # Persist refreshed token
-                _save_token(creds, token_path)
-                return creds
-            except Exception:
-                return None
-
-        return None
+        creds = Credentials.from_authorized_user_info(data, SCOPES)
     except Exception:
+        # Unreadable/corrupt file -> caller handles re-auth
         return None
+
+    if creds.valid:
+        return creds
+
+    # Expired but refreshable -> refresh and persist automatically
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleRequest())
+            with open(token_path, "w") as f:
+                f.write(creds.to_json())
+            return creds
+        except Exception:
+            return None
+
+    return None
+
+
+def _reauthenticate(token_path: Path) -> Optional[Credentials]:
+    """Launch the Hermes Google Workspace OAuth setup to obtain a fresh token.
+
+    The token file is missing/corrupt, so there is no token to refresh.
+    Prints the OAuth URL for the user; the user pastes the returned code
+    and the code is exchanged for a fresh token.
+
+    Returns valid credentials once the token file is valid, else None.
+    """
+    hermes_setup = find_hermes_workspace_setup()
+    if hermes_setup:
+        try:
+            import subprocess
+            proc = subprocess.run(
+                [sys.executable, str(hermes_setup), "--auth-url"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                print("\nGoogle Drive token is missing or corrupt. "
+                      "Open this URL to re-authenticate:\n")
+                print(proc.stdout.strip())
+                print("\nAfter authorising, paste the code and re-run the sync.\n", flush=True)
+        except Exception:
+            pass
+    return None
 
 
 def _save_token(creds: Credentials, token_path: Path) -> None:
@@ -222,7 +265,7 @@ def build_drive_service(
         service = build("drive", "v3", credentials=creds)
         return service, None
     except Exception as e:
-        return None, f"Failed to build Drive service: {e}"
+        return None, "Failed to build Drive service: {}".format(e)
 
 
 def check_auth(
@@ -241,6 +284,17 @@ def check_auth(
     if not token_path.is_file():
         return False, "No token file found at {}.".format(token_path)
 
+    # Auto-reauthenticate if the token file is missing/corrupt.
+    # (Sync failures used to show "authentication failed" without the
+    # user being able to recover — now the script prompts them.)
+    if _is_token_file_corrupt(token_path):
+        if _reauthenticate(token_path) is not None:
+            # Re-auth obtained a valid token; retry loading it.
+            creds = load_credentials(token_path)
+            if creds is not None:
+                return True, "Authenticated via re-authentication."
+        return False, "Token file missing/corrupt and re-authentication did not produce a valid token."
+
     creds = load_credentials(token_path)
     if creds is None:
         return False, "Token file exists but credentials could not be loaded or are invalid."
@@ -251,15 +305,3 @@ def check_auth(
         return False, "Token is invalid and cannot be refreshed."
 
     return True, "Authenticated."
-
-
-# ---------------------------------------------------------------------------
-# Request context (used by tests)
-# ---------------------------------------------------------------------------
-
-class Request:
-    """Minimal stub for google.auth.transport.requests.Request."""
-
-    def __call__(self):
-        import requests
-        return requests.Request()
