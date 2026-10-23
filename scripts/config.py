@@ -24,6 +24,57 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+# ---------------------------------------------------------------------------
+# .env auto-loading
+# ---------------------------------------------------------------------------
+# The repo root ships a .env with STORAGE_PROVIDER and
+# GOOGLE_DRIVE_ROOT_FOLDER_ID. Nothing in the sync path used to read it,
+# so syncs silently failed with "authentication failed" unless the caller
+# manually sourced .env first. Load it automatically, once, without
+# overwriting variables that are already set (so explicit overrides and
+# tests still win).
+
+_ENV_LOADED = False
+
+
+def load_dotenv_once(path: Optional[str] = None) -> None:
+    """Load key=value pairs from the repo-root .env into os.environ.
+
+    - Only runs once per process.
+    - Never overrides an already-set environment variable.
+    - Ignores comments, blank lines, and lines without '='.
+    - Strips surrounding single/double quotes from values.
+    - Fails silently if the file is missing or unreadable.
+    """
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    _ENV_LOADED = True
+
+    if path is None:
+        path = str(Path(__file__).resolve().parent.parent / ".env")
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 @dataclass
 class GoogleDriveConfig:
     """Google Drive-specific configuration.
@@ -94,6 +145,7 @@ class StorageConfig:
 
 def get_config() -> StorageConfig:
     """Get the current storage configuration."""
+    load_dotenv_once()
     config_path = os.environ.get("STORAGE_CONFIG_PATH")
     if config_path and os.path.exists(config_path):
         return StorageConfig.from_file(config_path)

@@ -396,6 +396,7 @@ After generating a weekly report, verify:
 - `scripts/config.py` — storage provider configuration (local / google_drive)
 - `scripts/google_drive_auth.py` — Google Drive OAuth2 authentication
 - `scripts/google_drive_provider.py` — Google Drive storage provider
+- `references/google-drive-sync.md` — folder layout, sync commands, token expiry/corruption rules
 - `templates/daily-template.md` — generic daily template
 - `templates/weekly-template.md` — generic weekly template
 - `tests/test_google_drive.py` — mocked integration tests (no real credentials needed)
