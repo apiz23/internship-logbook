@@ -118,6 +118,28 @@ def is_token_file_corrupt(token_path: Path) -> bool:
         return True
 
 
+def token_is_valid(token_path: Path = None) -> bool:
+    """True when the token file parses and holds usable or refreshable credentials.
+
+    Additive helper used by the test suite and by callers that need a cheap
+    readiness check without attempting a refresh. Never prints token contents.
+    """
+    if token_path is None:
+        token_path = _default_token_path()
+    token_path = Path(token_path)
+    if is_token_file_corrupt(token_path):
+        return False
+    try:
+        with open(token_path) as f:
+            data = json.load(f)
+        creds = Credentials.from_authorized_user_info(data, SCOPES)
+    except Exception:
+        return False
+    if creds.valid:
+        return True
+    return bool(getattr(creds, "refresh_token", None))
+
+
 def load_credentials(token_path: Path = None) -> Optional[Credentials]:
     """Load credentials from the token file, refreshing if needed.
 

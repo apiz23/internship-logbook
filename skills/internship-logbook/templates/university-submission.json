@@ -1,0 +1,16 @@
+{
+  "profile_name": "University internship submission",
+  "submission_enabled": true,
+  "daily_task_char_limit": 4000,
+  "weekly_summary_char_limit": 4000,
+  "target_min_chars": 3500,
+  "target_max_chars": 3800,
+  "working_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+  "daily_fields": ["date", "task_details", "total_hours"],
+  "weekly_fields": ["weekly_summary", "attachment"],
+  "max_weekly_attachments": 1,
+  "output_language": "en",
+  "internship_start_date": "",
+  "default_hours": null,
+  "public_holidays": {}
+}

@@ -290,7 +290,12 @@ class TestConfigBackwardsCompatibility:
     def test_root_folder_id_not_hardcoded(self):
         """Default root_folder_id should not be the old placeholder."""
         from config import GoogleDriveConfig
-        config = GoogleDriveConfig()
+
+        # Other tests (and config.load_dotenv_once) can populate the process
+        # environment from the repo .env, so clear it for this assertion.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GOOGLE_DRIVE_ROOT_FOLDER_ID", None)
+            config = GoogleDriveConfig()
         # Should be empty string by default, not the placeholder
         assert config.root_folder_id == ""
 
