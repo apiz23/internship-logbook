@@ -1,7 +1,7 @@
 ---
 name: internship-logbook
-description: Turn short, informal daily notes into a structured, university-style internship/industrial-training logbook, and generate weekly reports from them. Triggers when the user mentions an internship logbook, training logbook, practicum/OJT logbook, daily log, weekly report, or gives commands like /log, /review, /weekly. Also triggers when the user pastes rough end-of-day notes and wants them turned into a proper logbook entry.
-version: 1.0.0
+description: Turn short, informal daily notes into a structured, university-style internship/industrial-training logbook, generate weekly reports from them, and generate validated copy-ready university SUBMISSION fields (daily task details, weekly summary, one attachment recommendation) under a hard 4,000-character limit. Use for internship/training/practicum/OJT logbook work, daily logs, weekly/monthly reports, and university portal submissions. Triggers on /log, /review, /weekly, /monthly, /university, /submission, /submit-week, /submit-day, /validate-submission, and on phrases like "generate my university submission", "prepare week N for university submission", "give me Monday to Friday task details", "weekly summary under 4000 characters", "everything I need to copy into the university system", or rough end-of-day notes that should become a logbook entry.
+version: 1.1.0
 author: Hermes Community
 license: MIT
 platforms: [macos, linux, windows]
@@ -30,6 +30,26 @@ metadata:
         description: "When to generate weekly reports"
         default: "manual"
         prompt: "Weekly report timing (manual on request, or automatic every Friday)"
+      - key: submission.enabled
+        description: "Enable the university submission generator"
+        default: "true"
+        prompt: "Enable university submission generation? (true/false)"
+      - key: submission.daily_task_char_limit
+        description: "Maximum characters per daily task detail field"
+        default: "4000"
+        prompt: "Daily task detail character limit"
+      - key: submission.weekly_summary_char_limit
+        description: "Maximum characters for the weekly summary field"
+        default: "4000"
+        prompt: "Weekly summary character limit"
+      - key: submission.working_days
+        description: "Working days submitted to the portal"
+        default: "mon-fri"
+        prompt: "Which weekdays do you submit to the university? (e.g. mon-fri)"
+      - key: submission.max_weekly_attachments
+        description: "Attachments allowed per weekly submission"
+        default: "1"
+        prompt: "How many attachments does your portal allow per week?"
 required_environment_variables:
   - name: STORAGE_PROVIDER
     prompt: "Storage provider (local or google_drive)"
@@ -71,6 +91,9 @@ Load this skill whenever the user mentions any of the following:
 - "internship logbook", "training logbook", "practicum logbook", "OJT logbook"
 - "daily log", "log today's work", "add today's task"
 - "weekly report", "generate this week's report", "do the weekly"
+- "university submission", "submit to the university", "task details for
+  Monday to Friday", "weekly summary under 4000 characters", "validate my
+  submission", "prepare week N for university submission"
 - Review commands: "review today's entry", "check today's log"
 - Rough end-of-day notes like "today I worked on X, tested Y, bug in Z"
   (even without saying "logbook" explicitly)
@@ -82,6 +105,10 @@ Load this skill whenever the user mentions any of the following:
 | Log today's work | "log today's work", "add today's task", "today I worked on..." | Creates/updates `daily/YYYY-MM-DD.md` |
 | Review today's entry | "review today's entry", "check today's log" | Checks accuracy, wording, consistency |
 | Weekly report | "generate this week's report", "do the weekly" | Creates/updates `weeks/week-XX.md` |
+| University submission | "/university", "/submission", "/submit-week", "generate my university submission for this week", "Prepare Week 5 for university submission" | Copy-ready daily task details + weekly summary + one attachment, all measured |
+| One submission day | "/submit-day" plus a date | Regenerates a single day's task detail field |
+| Submission validation | "/validate-submission", "check my submission" | Dates, hours, limits, missing records, attachment readiness |
+| Character count | "is this under 4000 characters?" | Exact count, remaining, over-by, and shortening |
 
 ## Procedure
 
@@ -124,10 +151,17 @@ files" below).
 │   └── <project-name>.md   ← persistent context per project/workstream
 ├── attachments/
 │   └── week-XX/
+├── config/
+│   └── university-submission.json ← portal profile (local, git-ignored)
 └── scripts/
     ├── config.py              ← storage configuration (local + Google Drive)
     ├── google_drive_auth.py   ← OAuth2 authentication for Google Drive
-    └── google_drive_provider.py ← Google Drive storage provider
+    ├── google_drive_provider.py ← Google Drive storage provider
+    ├── university_profile.py  ← submission limits, working days, holidays
+    ├── logbook_reader.py      ← read-only parser for daily/ and weeks/
+    ├── submission_generator.py ← submission fields + validation
+    ├── char_limit.py          ← character counting and shortening
+    └── submission_cli.py      ← CLI for the submission commands
 ```
 
 If the user already has a different layout, adapt to it rather than
@@ -311,6 +345,80 @@ numbers, IDs, account info, credentials, or confidential company
 information. Never ask the user to paste or store actual passwords, API
 keys, or credentials anywhere in the logbook.
 
+### University submission generation
+
+Universities often require the same internship record re-entered into their
+own portal: one task-detail field per working day (4,000 characters), one
+weekly summary field (4,000 characters) and exactly one attachment. Do not
+hand-format that per week - generate it from the logbook that already exists.
+
+Details, profile keys and worked rules: `references/university-submission.md`.
+Implementation: `scripts/university_profile.py`, `scripts/logbook_reader.py`,
+`scripts/submission_generator.py`, `scripts/char_limit.py`.
+
+Run it rather than estimating:
+
+```bash
+python scripts/submission_cli.py --week 13            # copy-ready output
+python scripts/submission_cli.py --day 2026-10-28     # one day
+python scripts/submission_cli.py --week 13 --validate # checks only
+python scripts/submission_cli.py --week 13 --weekly-summary-file draft.txt
+python scripts/submission_cli.py --validate-text draft.txt --limit 4000
+```
+
+Non-negotiable rules:
+
+1. **Daily records are the only source of daily content.** Read
+   `daily/YYYY-MM-DD.md` for every working day in the week; the weekly
+   report adds context but never overrides a daily record. Never pull
+   activity from another week to fill a gap.
+2. **A missing day is a question, not a gap to guess.** Name the exact date,
+   leave it out, and ask for the notes. Same for hours: a `TBC` day is
+   reported as `NOT RECORDED` - never assume eight hours and never copy the
+   previous day's value.
+3. **One field per day, consolidated.** If the day held several activities,
+   the field describes them together as the work performed; do not split a
+   day into multiple submissions.
+4. **Character counts are measured, never asserted.** Use
+   `char_limit.count_chars` / `check_limit`. Every field is re-measured after
+   any shortening, and the number shown is the count of the final text.
+   Daily fields keep as much source content as the 4,000 limit allows (the
+   condenser refills dropped blocks that still fit); never shorten more than
+   the limit forces, and never pad short content.
+5. **Shortening deletes, it does not invent.** `fit_to_limit` drops
+   low-value blocks and sentences; it never rewrites a claim into a bigger
+   one. If a rewrite is needed for readability, write it from the same
+   records and validate the final text again.
+6. **Exactly one attachment.** Rank real local evidence first
+   (`attachments/week-XX/`), then a file named in a daily entry, then a URL,
+   then a suggestion. Consolidate several useful files into one PDF only
+   when the originals exist and the content survives intact. Never fabricate
+   evidence; if nothing exists, say what to capture. Always remind the user
+   to strip confidential company information and personal data first.
+7. **Nothing is submitted.** The output is copy-ready text for the user's own
+   portal. Never claim a portal accepted anything.
+8. **The polished weekly summary is part of the first response.** Do not
+   present the script's deterministic draft and offer a rewrite later. Read
+   the week's records, write the summary yourself (3,500-4,000 characters,
+   professional prose, no sentence copied verbatim from a daily field), save
+   it to a temp file, and run `--weekly-summary-file` so the final text is
+   measured. One request, one complete answer.
+9. **Content first, diagnostics last.** The rendered layout puts every
+   copy-ready field first (daily blocks, weekly summary, attachment) and
+   places validation, counters and notes after an explicit
+   `END OF COPY-READY CONTENT` line. Never lead with a validation report.
+10. **A missing day keeps its slot and is marked incomplete.** The block
+    reads `(INCOMPLETE - NO DAILY RECORD)` with an empty task field and a
+    note not to submit it. Still show every other day's real content. Never
+    delete the slot, never fill it.
+
+The rendered layout (copy-ready per field, counters outside the text) is
+`templates/university-submission-output.md`. Workflow for every request:
+read the week's records, write the summary prose yourself, save it, run
+`submission_cli.py --week N --weekly-summary-file <file>`, then present that
+output as-is. The script measures and fits the real final text; you do not
+reformat afterwards.
+
 ## Commands
 
 These are natural-language trigger phrases, not slash commands —
@@ -330,6 +438,20 @@ command exists; typing a bare slash gets "Unknown command."
 - **Weekly report** — ask "generate this week's report",
   "give me the weekly report", or "do the weekly". The agent
   runs the weekly-report workflow for the current (or specified) week.
+- **University submission** — `/university`, `/submission`, `/submit-week`,
+  or "generate my university submission for this week" / "Prepare Week 5
+  for university submission" / "give me Monday to Friday task details" /
+  "prepare everything I need to copy into the university system". The agent
+  runs the submission workflow for the current or named week and presents the
+  copy-ready layout with its validation report.
+- **One submission day** — `/submit-day` plus a date, or "regenerate
+  Wednesday's task detail". Emits that single day's field, measured.
+- **Validate a submission** — `/validate-submission`, or "validate week 13
+  for submission". Runs the seven checks without regenerating content, and
+  lists missing days, missing hours and attachment readiness.
+- **Character check** — "is my summary under 4000 characters?" Run
+  `submission_cli.py --validate-text <file> --limit 4000`; never answer from
+  an estimate.
 
 ## Pitfalls
 
@@ -360,6 +482,18 @@ command exists; typing a bare slash gets "Unknown command."
    generic — personal details belong in `AGENTS.md` or `projects/*.md`,
    not in the procedure file.
 
+8. **Don't state a character count you didn't measure.** Portal limits count
+   spaces, punctuation and newlines. Estimate by eye and the field gets
+   rejected or truncated at the worst moment. Measure the final text, every
+   time.
+
+9. **Don't fill a submission day from another week.** A missing daily record
+   stays missing and is named. Reusing last week's activity produces a false
+   record a supervisor can check.
+
+10. **Don't recommend two attachments.** The portal takes one. Rank, pick
+    one, and mention consolidation only as an option on real files.
+
 ## Verification
 
 After logging daily notes, verify:
@@ -386,6 +520,19 @@ After generating a weekly report, verify:
 7. **No cross-week contamination:** The report only draws from daily
    files that actually fall inside that week's date range.
 
+After generating a university submission, verify:
+
+8. **Every field measured:** each daily field and the weekly summary has a
+   count produced by `char_limit`, and every count shown matches the text
+   displayed.
+9. **Every day traceable:** each `DAY n` block maps to an existing
+   `daily/YYYY-MM-DD.md` record in the same week; missing dates are listed
+   rather than skipped silently.
+10. **One attachment, honest status:** exactly one recommendation, with
+    `Ready` only when the file actually exists locally.
+11. **No port of the portal inside the repo:** the run produced text only —
+    nothing was uploaded or submitted.
+
 ## Reference files
 
 - `assets/AGENTS-template.md` — template for a new user's AGENTS.md
@@ -400,3 +547,19 @@ After generating a weekly report, verify:
 - `templates/daily-template.md` — generic daily template
 - `templates/weekly-template.md` — generic weekly template
 - `tests/test_google_drive.py` — mocked integration tests (no real credentials needed)
+- `references/university-submission.md` — portal fields, limits, attachment
+  ranking, validation rules and the copy-ready layout
+- `scripts/university_profile.py` — submission profile (limits, working days,
+  holidays, start date) loaded from `config/university-submission.json`
+- `scripts/logbook_reader.py` — read-only parser for `daily/` and `weeks/`
+- `scripts/submission_generator.py` — daily/weekly composition, attachment
+  recommendation, seven validation checks, renderers
+- `scripts/char_limit.py` — character counting, limit checks, delete-only
+  shortening
+- `scripts/submission_cli.py` — CLI for `/university`, `/submit-week`,
+  `/submit-day`, `/validate-submission`
+- `templates/university-submission.json` — profile template to copy
+- `templates/university-submission-output.md` — copy-ready output template
+- `tests/test_char_limit.py`, `tests/test_logbook_reader.py`,
+  `tests/test_submission_generator.py` — limits, parsing, generation and
+  no-fabrication tests

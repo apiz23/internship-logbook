@@ -12,6 +12,9 @@ google_token.json
 token.json
 *.token.json
 scripts/config.json
+
+# University submission profile (start date, holidays, local limits)
+config/university-submission.json
 scripts/__pycache__/
 tests/__pycache__/
 

@@ -20,7 +20,14 @@ internship-logbook/
 │   ├── google_drive_auth.py          ← OAuth2 authentication (Hermes-native)
 │   ├── google_drive_provider.py      ← Google Drive storage provider
 │   ├── google_drive_sync.py          ← Google Drive sync
-│   └── setup_google_drive.py         ← setup wizard (new!)
+│   ├── setup_google_drive.py         ← setup wizard
+│   ├── char_limit.py                 ← character counting + validation
+│   ├── university_profile.py         ← submission profile (limits, days)
+│   ├── logbook_reader.py             ← read-only parser for daily/weeks
+│   ├── submission_generator.py       ← university submission fields
+│   └── submission_cli.py             ← CLI for the submission commands
+├── config/
+│   └── university-submission.json    ← your portal profile (git-ignored)
 ├── assets/
 │   ├── AGENTS-template.md          ← fill this in once, for yourself
 │   ├── daily-template-simple.md    ← lightweight daily entry format
@@ -30,9 +37,16 @@ internship-logbook/
 │   ├── daily-template.md           ← generic daily template
 │   └── weekly-template.md          ← generic weekly template
 ├── references/
-│   └── writing-style.md            ← tone guide + before/after examples
+│   ├── writing-style.md            ← tone guide + before/after examples
+│   └── university-submission.md    ← portal fields, limits, validation
+├── templates/
+│   ├── university-submission.json  ← profile template
+│   └── university-submission-output.md ← copy-ready layout
 ├── tests/
-│   └── test_google_drive.py        ← mocked integration tests
+│   ├── test_google_drive.py        ← mocked integration tests
+│   ├── test_char_limit.py          ← counting/limit tests
+│   ├── test_logbook_reader.py      ← parser + regression tests
+│   └── test_submission_generator.py ← submission generation tests
 ├── .env.example                      ← environment variable template
 └── .gitignore                        ← excludes credentials and personal data
 ```
@@ -133,6 +147,134 @@ This was written by a software engineering intern, so the examples in
 Adjust `AGENTS.md`'s "Notes" field and your `projects/*.md` files for
 whatever your actual work is (data analysis, design, marketing, lab
 research, etc.) — you shouldn't need to touch `SKILL.md` itself.
+
+## University Submission Generator
+
+Many universities make you re-enter your internship record in their own
+portal: one task-detail field per working day, one weekly summary, one
+attachment. This generates all of it from the logbook you already keep, with
+the character limits enforced and counted.
+
+### Commands
+
+| Command | What it does |
+|---------|--------------|
+| `/university` | Complete submission for the current or specified week |
+| `/submission` | Copy-ready submission fields |
+| `/submit-week` | Alias for a complete weekly submission |
+| `/submit-day` | Regenerate one day's task detail |
+| `/validate-submission` | Limits, dates, hours, missing records, attachment readiness |
+
+Natural language works too: "generate my university submission for this
+week", "prepare Week 5 for university submission", "give me Monday to Friday
+task details", "weekly summary under 4000 characters", "prepare everything I
+need to copy into the university system".
+
+### Direct CLI use
+
+```bash
+python scripts/submission_cli.py --week 13            # copy-ready layout
+python scripts/submission_cli.py                      # current week
+python scripts/submission_cli.py --day 2026-10-28      # one day
+python scripts/submission_cli.py --week 13 --validate  # checks only
+python scripts/submission_cli.py --week 13 --weekly-summary-file draft.txt
+python scripts/submission_cli.py --validate-text draft.txt --limit 4000
+python scripts/submission_cli.py --week 13 --json
+```
+
+### Output
+
+```text
+UNIVERSITY INTERNSHIP SUBMISSION — WEEK 13
+...
+DAY 1 — MONDAY
+Date: 2026-10-26
+Total Hours: 8 hours
+Character Count: 3703 / 4000
+
+TASK DETAILS:
+[text you paste - no counters, no headings inside it]
+...
+WEEKLY SUMMARY
+Character Count: 1035 / 4000
+...
+WEEKLY ATTACHMENT
+Recommended File: attachments/week-13/otalk-issue-list-2026-10-26.md
+Reason: Local evidence file in the week folder (md, 2941 bytes).
+Upload Status: Ready
+...
+END OF COPY-READY CONTENT
+[everything above is submission text]
+========================================
+WARNINGS AND VALIDATION
+- Dates: NEEDS ATTENTION — missing daily record(s): 2026-10-30 (Friday)
+- Daily task details: PASS
+- Character limits: PASS
+- Total hours: PASS
+- Weekly summary: PASS
+- Single attachment: PASS
+- Source accuracy: PASS
+```
+
+### Experience
+
+One request produces the whole submission. The weekly summary is written from
+the week's records in the same response - you never have to ask for a fuller
+version. Content comes first; validation and notes sit after an
+`END OF COPY-READY CONTENT` marker so nothing diagnostic lands in a paste. A
+missing day keeps its block, marked `(INCOMPLETE - NO DAILY RECORD)`, with an
+empty field and a do-not-submit note.
+
+### What it will not do
+
+- It will not invent a day that has no `daily/YYYY-MM-DD.md`; it names the
+  date and asks for the notes.
+- It will not assume 8 hours when `Total Hours` says `TBC`.
+- It will not claim a character count it did not measure.
+- It will not fabricate or retouch evidence, and it recommends at most one
+  attachment.
+- It will not submit anything to the portal - the text is for you to paste.
+
+### Configuration
+
+Copy `templates/university-submission.json` to
+`config/university-submission.json` (git-ignored) and set at least
+`internship_start_date`. Limits, working days, holidays and output language
+live there, not in `SKILL.md`:
+
+```json
+{
+  "submission_enabled": true,
+  "daily_task_char_limit": 4000,
+  "weekly_summary_char_limit": 4000,
+  "target_min_chars": 3500,
+  "target_max_chars": 3800,
+  "working_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+  "daily_fields": ["date", "task_details", "total_hours"],
+  "weekly_fields": ["weekly_summary", "attachment"],
+  "max_weekly_attachments": 1,
+  "output_language": "en",
+  "internship_start_date": "YYYY-MM-DD",
+  "public_holidays": {"YYYY-MM-DD": "Holiday name"}
+}
+```
+
+If the profile has no start date, it is read from an
+`Internship start date: YYYY-MM-DD` line in `AGENTS.md`. Another university
+reuses the same code by shipping a different profile.
+
+### Tests
+
+```bash
+python -m pytest tests/test_char_limit.py tests/test_logbook_reader.py \
+                 tests/test_submission_generator.py -q
+```
+
+Covers exact 4,000 / 4,001 boundaries, spaces, newlines, punctuation and
+Unicode, five-day weeks, public holidays, shorter weeks, missing records,
+missing hours, multiple activities in one day, summary accuracy and limit,
+single-attachment selection, and residue checks that existing daily/weekly
+workflows still parse.
 
 ## Google Drive Authentication
 
