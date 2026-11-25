@@ -8,7 +8,7 @@ DAILY TASK DETAILS
 DAY 1 — MONDAY
 Date: YYYY-MM-DD
 Total Hours: X hours
-Character Count: XXXX / 4000
+Character Count: XXXX / 4000 (Concise)
 
 TASK DETAILS:
 [complete professional task description]
@@ -18,7 +18,7 @@ TASK DETAILS:
 DAY 2 — TUESDAY
 Date: YYYY-MM-DD
 Total Hours: X hours
-Character Count: XXXX / 4000
+Character Count: XXXX / 4000 (Concise)
 
 TASK DETAILS:
 [complete professional task description]
@@ -31,7 +31,7 @@ the warnings section instead of being given a day block]
 DAY n — FRIDAY (INCOMPLETE - NO DAILY RECORD)
 Date: YYYY-MM-DD
 Total Hours: NOT RECORDED
-Character Count: 0 / 4000
+Character Count: 0 / 4000 (no text)
 Note: no daily record exists for YYYY-MM-DD. Do not submit this day until the
 notes are written; nothing was invented.
 
@@ -40,7 +40,7 @@ TASK DETAILS:
 ========================================
 WEEKLY SUMMARY
 ========================================
-Character Count: XXXX / 4000
+Character Count: XXXX / 4000 (Concise)
 
 [complete weekly summary]
 

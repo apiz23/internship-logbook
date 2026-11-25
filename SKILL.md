@@ -1,7 +1,7 @@
 ---
 name: internship-logbook
-description: Turn short, informal daily notes into a structured, university-style internship/industrial-training logbook, generate weekly reports from them, and generate validated copy-ready university SUBMISSION fields (daily task details, weekly summary, one attachment recommendation) under a hard 4,000-character limit. Use for internship/training/practicum/OJT logbook work, daily logs, weekly/monthly reports, and university portal submissions. Triggers on /log, /review, /weekly, /monthly, /university, /submission, /submit-week, /submit-day, /validate-submission, and on phrases like "generate my university submission", "prepare week N for university submission", "give me Monday to Friday task details", "weekly summary under 4000 characters", "everything I need to copy into the university system", or rough end-of-day notes that should become a logbook entry.
-version: 1.1.0
+description: Turn short, informal daily notes into a structured, university-style internship/industrial-training logbook, generate weekly reports from them, and generate validated copy-ready university SUBMISSION fields (daily task details, weekly summary, one attachment recommendation) with concise preferred lengths (daily 500-1,200, weekly 800-1,500) and a hard 4,000-character maximum. Use for internship/training/practicum/OJT logbook work, daily logs, weekly/monthly reports, and university portal submissions. Triggers on /log, /review, /weekly, /monthly, /university, /submission, /submit-week, /submit-day, /validate-submission, and on phrases like "generate my university submission", "prepare week N for university submission", "give me Monday to Friday task details", "weekly summary under 4000 characters", "everything I need to copy into the university system", or rough end-of-day notes that should become a logbook entry.
+version: 1.2.0
 author: Hermes Community
 license: MIT
 platforms: [macos, linux, windows]
@@ -348,13 +348,30 @@ keys, or credentials anywhere in the logbook.
 ### University submission generation
 
 Universities often require the same internship record re-entered into their
-own portal: one task-detail field per working day (4,000 characters), one
-weekly summary field (4,000 characters) and exactly one attachment. Do not
-hand-format that per week - generate it from the logbook that already exists.
+own portal: one task-detail field per working day (4,000 characters maximum),
+one weekly summary field (4,000 characters maximum) and exactly one
+attachment. Do not hand-format that per week - generate it from the logbook
+that already exists.
+
+**The 4,000-character limit is an allowance, not a target.** A supervisor
+reads the field; filling it is not an achievement. Write concise, professional
+English:
+
+| Field | Preferred length | Hard maximum |
+|-------|------------------|--------------|
+| Daily task details | 500-1,200 characters (up to 1,500 on a genuinely busy or technically complex day) | 4,000 |
+| Weekly summary | 800-1,500 characters | 4,000 |
+
+Prioritise what was worked on, what was done, the important issues, findings,
+solutions and outcomes. Combine related activities, group related defects,
+summarise counts (not every record), and drop repetition, timestamps, file
+IDs and exhaustive test-case lists. Keep critical defect IDs and blockers.
+Never pad a short day to look fuller.
 
 Details, profile keys and worked rules: `references/university-submission.md`.
-Implementation: `scripts/university_profile.py`, `scripts/logbook_reader.py`,
-`scripts/submission_generator.py`, `scripts/char_limit.py`.
+Implementation: `scripts/concise.py`, `scripts/university_profile.py`,
+`scripts/logbook_reader.py`, `scripts/submission_generator.py`,
+`scripts/char_limit.py`.
 
 Run it rather than estimating:
 
@@ -380,11 +397,11 @@ Non-negotiable rules:
    the field describes them together as the work performed; do not split a
    day into multiple submissions.
 4. **Character counts are measured, never asserted.** Use
-   `char_limit.count_chars` / `check_limit`. Every field is re-measured after
-   any shortening, and the number shown is the count of the final text.
-   Daily fields keep as much source content as the 4,000 limit allows (the
-   condenser refills dropped blocks that still fit); never shorten more than
-   the limit forces, and never pad short content.
+   `char_limit.count_chars` / `check_limit` / `length_band`. Every field is
+   re-measured after any revision, and the number shown is the count of the
+   final text. Each field reports its band - `Concise` (within the preferred
+   range), `Detailed` (above preferred but inside the maximum) or
+   `Over limit` - and only `Over limit` is a failure.
 5. **Shortening deletes, it does not invent.** `fit_to_limit` drops
    low-value blocks and sentences; it never rewrites a claim into a bigger
    one. If a rewrite is needed for readability, write it from the same
@@ -397,12 +414,12 @@ Non-negotiable rules:
    to strip confidential company information and personal data first.
 7. **Nothing is submitted.** The output is copy-ready text for the user's own
    portal. Never claim a portal accepted anything.
-8. **The polished weekly summary is part of the first response.** Do not
-   present the script's deterministic draft and offer a rewrite later. Read
-   the week's records, write the summary yourself (3,500-4,000 characters,
-   professional prose, no sentence copied verbatim from a daily field), save
-   it to a temp file, and run `--weekly-summary-file` so the final text is
-   measured. One request, one complete answer.
+8. **The generated summary is the deliverable, not a draft.** The generator
+   writes the weekly summary from the week report or from aggregated facts
+   and keeps it at 800-1,500 characters. Do not replace it with a 3,500+
+   character rewrite: if you do edit it, keep it concise, copy no sentence
+   verbatim from a daily field, and run `--weekly-summary-file` so the final
+   text is measured. One request, one complete answer.
 9. **Content first, diagnostics last.** The rendered layout puts every
    copy-ready field first (daily blocks, weekly summary, attachment) and
    places validation, counters and notes after an explicit
@@ -412,12 +429,12 @@ Non-negotiable rules:
     note not to submit it. Still show every other day's real content. Never
     delete the slot, never fill it.
 
-The rendered layout (copy-ready per field, counters outside the text) is
-`templates/university-submission-output.md`. Workflow for every request:
-read the week's records, write the summary prose yourself, save it, run
-`submission_cli.py --week N --weekly-summary-file <file>`, then present that
-output as-is. The script measures and fits the real final text; you do not
-reformat afterwards.
+The rendered layout (copy-ready per field, counters and bands outside the
+text) is `templates/university-submission-output.md`. Workflow for every
+request: run `submission_cli.py --week N`, then present that output as-is.
+The generator already produces concise daily fields and a concise weekly
+summary, measured. Edit a field only when it is genuinely wrong or empty, and
+re-run so the final text is measured; never reformat by hand.
 
 ## Commands
 

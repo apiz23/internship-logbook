@@ -26,11 +26,26 @@ from typing import Iterable, Optional
 
 from char_limit import (
     DEFAULT_LIMIT,
+    DETAILED_DAILY_MAX,
+    PREFERRED_DAILY_MAX,
+    PREFERRED_DAILY_MIN,
+    PREFERRED_WEEKLY_MAX,
+    PREFERRED_WEEKLY_MIN,
     FitResult,
     check_limit,
     count_chars,
     fit_to_limit,
+    length_band,
     normalise_newlines,
+)
+from concise import (
+    clean_line,
+    clean_text,
+    collect_bug_ids,
+    drop_heading_only_blocks,
+    is_administrative_noise,
+    summarise_blocks,
+    summarise_sequential,
 )
 from logbook_reader import (
     WEEKDAY_NAMES,
@@ -45,6 +60,7 @@ PASS = "PASS"
 ATTENTION = "NEEDS ATTENTION"
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_LIST_MARKER = re.compile(r"(?m)^([ \t]*(?:\d{1,3}|[A-Za-z])[.)])[ \t]+")
 _BUG_ID = re.compile(r"\bBUG-\d+\b")
 _TEST_ID = re.compile(r"\bTC-?\d+\b")
 _WS = re.compile(r"\s+")
@@ -56,6 +72,15 @@ _ACTIVITY_KEYWORDS = {
     "development": ("implement", "develop", "build", "code", "refactor", "script"),
     "automation": ("automation", "automate", "playwright", "script", "pipeline"),
 }
+# Supervisor-facing wording for each activity family.
+_ACTIVITY_LABELS = {
+    "testing": "functional and regression testing",
+    "debugging": "defect investigation",
+    "documentation": "documentation",
+    "research": "research and review",
+    "development": "development work",
+    "automation": "automation work",
+}
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’.\-/%]*")
 
 
@@ -65,10 +90,28 @@ _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’.\-/%]*")
 
 
 def split_sentences(text: str) -> list[str]:
-    flat = _WS.sub(" ", (text or "").replace("\n", " ")).strip()
+    """Split prose into sentences, keeping list markers attached to their text.
+
+    ``1. Findings`` stays whole; splitting on the period alone produces a
+    bare ``1.`` plus an orphan.
+    """
+    markers: list[str] = []
+
+    def _protect(match: re.Match[str]) -> str:
+        markers.append(match.group(1))
+        return f"\x00{len(markers) - 1}\x00 "
+
+    protected = _LIST_MARKER.sub(_protect, normalise_newlines(text or ""))
+    flat = _WS.sub(" ", protected).strip()
     if not flat:
         return []
-    return [s.strip() for s in _SENTENCE_END.split(flat) if s.strip()]
+    out = []
+    for part in _SENTENCE_END.split(flat):
+        if not part.strip():
+            continue
+        restored = re.sub(r"\x00(\d+)\x00", lambda m: markers[int(m.group(1))], part)
+        out.append(restored.strip())
+    return out
 
 
 def first_sentences(text: str, count: int = 1) -> str:
@@ -163,7 +206,14 @@ def _topic_phrase(record: DailyRecord, max_words: int = 16) -> str:
     sentences when stripping would leave nothing, so a day that opens with
     "Second working day of Week 13." still contributes a topic.
     """
-    for sentence in split_sentences(record.task_detail or record.raw_notes)[:3]:
+    generic = re.compile(
+        r"workstreams? (?:were|was)|work continued|the day (?:began|started|covered)|"
+        r"today'?s work|continued (?:manual|with)",
+        re.I,
+    )
+    for sentence in split_sentences(record.task_detail or record.raw_notes)[:4]:
+        if generic.search(sentence):
+            continue
         stem = _MD_EMPHASIS.sub(lambda m: m.group(2), _MD_CODE.sub(lambda m: m.group(1), sentence))
         for prefix in _DAY_OPENERS:
             if stem.lower().startswith(prefix):
@@ -208,7 +258,12 @@ def _status_label(record: DailyRecord) -> str:
     for line in (record.status or "").splitlines():
         clean = _MD_EMPHASIS.sub(lambda m: m.group(2), line).strip(" -")
         if clean:
+            # A status is a state, not a sentence: drop the qualifier in
+            # brackets so the line never renders half-open.
+            clean = clean.split("(")[0].strip()
             label = " ".join(clean.split()[:4])
+            if not label:
+                continue
             return _STATUS_CANON.get(label.lower(), label)
     return ""
 
@@ -285,10 +340,19 @@ class DailySubmission:
     fit: FitResult
     issues: list[str] = field(default_factory=list)
     incomplete: bool = False
+    authored: bool = False
+    preferred_max: int = 0
 
     @property
     def count(self) -> int:
         return count_chars(self.task_text)
+
+    @property
+    def band(self) -> str:
+        """Concise / Detailed / Over limit for the measured field."""
+        return length_band(
+            self.count, self.preferred_max or self.fit.limit, self.fit.limit
+        )
 
     @property
     def within_limit(self) -> bool:
@@ -329,7 +393,10 @@ def _as_prose(text: str, max_items: int = 2) -> str:
     return (body[0].upper() + body[1:] + ".") if body else ""
 
 
-_HEADING_BLOCK = re.compile(r"^(?:[A-Z][.)]|\d+[.)]|#{1,6}\s)")
+_HEADING_BLOCK = re.compile(
+    r"^(?:[A-Z][.)]|\d+[.)]|#{1,6}\s|(?:Workstream|Section|Part|Block|Phase|Appendix)\b)",
+    re.I,
+)
 
 
 def _looks_like_heading(block: str) -> bool:
@@ -365,49 +432,237 @@ def drop_orphan_headings(text: str) -> str:
     return "\n\n".join(blocks)
 
 
+def _subsection(body: str, name: str) -> str:
+    """Return one ``### Name`` subsection's text from a day report body."""
+    pattern = re.compile(
+        r"^#{2,6}\s*" + re.escape(name) + r"\s*$([\s\S]*?)(?=^#{2,6}\s|\Z)",
+        re.M | re.I,
+    )
+    match = pattern.search(body or "")
+    return match.group(1).strip() if match else ""
+
+
+def weekly_day_parts(
+    collection: WeekCollection, day: date
+) -> tuple[str, str]:
+    """The week report's own Task Detail and Issue text for one day.
+
+    The report restates each day in finished prose. It is only used when the
+    raw daily record cannot supply a readable field, and it is still the same
+    day's work - never another day's.
+    """
+    if collection.weekly is None or not collection.weekly.days:
+        return "", ""
+    wanted = f"{day.strftime('%A').lower()}"
+    for heading, body in collection.weekly.days.items():
+        if heading.strip().lower().startswith(wanted):
+            return _subsection(body, "task detail"), _subsection(body, "issue")
+    return "", ""
+
+
+def _join_ids(ids: list[str]) -> str:
+    if not ids:
+        return ""
+    if len(ids) == 1:
+        return ids[0]
+    if len(ids) == 2:
+        return f"{ids[0]} and {ids[1]}"
+    return ", ".join(ids[:-1]) + " and " + ids[-1]
+
+
+def _tidy_paragraphs(text: str) -> str:
+    """Close dangling lead-ins and give every paragraph terminal punctuation.
+
+    A record can end a selected sentence on a colon whose bullet list was
+    dropped as administrative noise, which renders as "... carried to a
+    verdict with evidence" and stops dead.
+    """
+    out: list[str] = []
+    for raw in (text or "").split("\n\n"):
+        para = raw.strip()
+        if not para:
+            continue
+        while para.endswith(":"):
+            sentences = split_sentences(para)
+            sentences = [s for s in sentences if s.rstrip().endswith(":") is False]
+            para = " ".join(sentences).strip()
+            if not para:
+                break
+        if not para:
+            continue
+        if para[-1] not in ".!?\"'":
+            para = para.rstrip(" ,;:") + "."
+        out.append(para)
+    return "\n\n".join(out)
+
+
+def _balance_parens(text: str) -> str:
+    """Drop an unclosed parenthetical instead of leaving it half-open.
+
+    Trimming a clause can land inside brackets, which renders as
+    "Status: Completed (discovery, deduplication, per-URL." — a fragment that
+    reads as broken rather than shortened.
+    """
+    text = (text or "").rstrip()
+    if text.count("(") == text.count(")"):
+        return text
+    depth = 0
+    open_at = -1
+    for i, ch in enumerate(text):
+        if ch == "(":
+            if depth == 0:
+                open_at = i
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+    if depth and open_at > 0:
+        return text[:open_at].rstrip(" ,;:-")
+    return text
+
+
+def _trim_clause(text: str, max_chars: int) -> str:
+    """Cut a long statement at a natural clause boundary."""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return _balance_parens(text)
+    cut = text[:max_chars]
+    # Prefer a whole sentence, then a clause, so the blocker never ends on a
+    # dangling word like "never" or "not".
+    stop = max(cut.rfind(". "), cut.rfind("; "), cut.rfind(", "), cut.rfind(" and "))
+    trimmed = cut[:stop] if stop > max_chars * 0.4 else cut[: cut.rfind(" ")]
+    words = trimmed.rstrip(" ,;.").split()
+    while words and words[-1].lower().strip(",;:") in {
+        "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "from",
+        "with", "as", "at", "by", "that", "which", "is", "was", "were", "be",
+        "never", "not", "only", "also", "but",
+    }:
+        words.pop()
+    return _balance_parens(" ".join(words).rstrip(" ,;"))
+
+
+def _first_useful_sentence(text: str, max_chars: int = 220) -> str:
+    """First line of a section that states the issue, without headings.
+
+    Section titles, bullet markers and metadata lines are skipped so the
+    rendered blocker reads as a finding rather than as leftover Markdown.
+    """
+    for raw in to_plain_text(text).splitlines():
+        line = clean_line(raw).strip()
+        if len(line) < 25 or is_administrative_noise(line):
+            continue
+        # A lead-in ("Three defects were identified:") names nothing; the
+        # bullet under it carries the finding.
+        # A short line with no full stop is a lead-in, not a finding.
+        if len(line.split()) <= 9 and not line.endswith((".", "!", "?")):
+            continue
+        sentences = split_sentences(line)
+        first = sentences[0] if sentences else line
+        if is_administrative_noise(first) or first.endswith(":"):
+            continue
+        # A sentence that stops on a function word is cut off in the source.
+        if first[:1].islower():
+            continue
+        tail = first.rstrip(" .;:").split()
+        if len(tail) < 5:
+            continue
+        if tail and tail[-1].lower() in {
+            "the", "a", "an", "and", "or", "of", "to", "in", "on", "for",
+            "from", "with", "as", "at", "by", "that", "which", "never", "not",
+        }:
+            continue
+        return _trim_clause(first.rstrip(" .;:"), max_chars)
+    return ""
+
+
 def compose_daily_task(
     record: DailyRecord,
     limit: int = DEFAULT_LIMIT,
     target: Optional[int] = None,
     include_context: bool = True,
+    preferred_min: int = PREFERRED_DAILY_MIN,
+    preferred_max: int = PREFERRED_DAILY_MAX,
+    detailed_max: int = DETAILED_DAILY_MAX,
+    report_detail: str = "",
+    report_issue: str = "",
 ) -> tuple[str, FitResult]:
-    """Build one day's task detail from its daily record.
+    """Build one concise day's task detail from its daily record.
 
-    The source task detail is the base. When budget allows, the day's
-    recorded issue and proposed solution are appended so a supervisor sees
-    problem, action and outcome - still only content that exists in the
-    record. The result is always measured after composition.
+    The portal's 4,000 characters are a ceiling, not a quota: the field is a
+    short account of the day, normally 500-1,200 characters and up to 1,500
+    on a genuinely busy or technically complex day. Selection is extractive,
+    so every sentence comes from the record; administrative detail (URLs,
+    timestamps, file paths, identifier dumps) is dropped first and findings,
+    defects and blockers are kept.
     """
     base = record.task_detail.strip() or record.raw_notes.strip()
     if not base:
         return "", fit_to_limit("", limit=limit)
 
-    body = base
-    if include_context:
-        remaining = limit - count_chars(body)
-        for label, section in (
-            ("Issue identified", record.issue),
-            ("Action taken", record.proposed_solution),
-        ):
-            sentence = _as_prose(section, 2)
-            if not sentence:
-                continue
-            addition = f"\n\n{label}: {sentence}"
-            if count_chars(addition) + 40 > remaining:
-                continue
-            body = body.rstrip() + addition
-            remaining = limit - count_chars(body)
+    plain = clean_text(to_plain_text(drop_heading_only_blocks(base)))
+    result = summarise_sequential(
+        plain,
+        min_chars=preferred_min,
+        max_chars=preferred_max,
+        busy_max_chars=detailed_max,
+    )
 
-    plain = to_plain_text(body)
-    fit = fit_to_limit(plain, limit=limit, target=target)
-    # Renumber after condensation: dropping items must not leave 1, 2, 4, 7,
-    # and remove headings whose body was dropped with them.
+    # Raw notes can be too fragmented to read (bulleted tables, one-line
+    # labels). When the week report holds a written summary of the *same*
+    # day, that prose is the better base; the daily record still decides
+    # hours, defects and blockers.
+    if report_detail and count_chars(result.text) < preferred_max:
+        alt_plain = clean_text(to_plain_text(report_detail))
+        alt = summarise_sequential(
+            alt_plain,
+            min_chars=preferred_min,
+            max_chars=preferred_max,
+            busy_max_chars=detailed_max,
+        )
+        # The report restates the same day in finished prose; when it gives a
+        # fuller account than the raw-notes extraction, it is the better base.
+        if count_chars(alt.text) > count_chars(result.text) + 40:
+            result = alt
+            plain = alt_plain
+
+    parts: list[str] = [result.text] if result.text else []
+
+    # Group defects instead of leaving scattered mentions: one line, real IDs.
+    bug_ids = collect_bug_ids(plain)
+    if len(bug_ids) >= 2 and not any(b in result.text for b in bug_ids):
+        parts.append(f"Defects recorded: {_join_ids(bug_ids)}.")
+
+    if include_context:
+        issue_text = normalise_for_compare(" ".join(parts))
+        blocker = _first_useful_sentence(record.issue) or _first_useful_sentence(
+            report_issue
+        )
+        if (
+            blocker
+            and normalise_for_compare(blocker) not in issue_text
+            and not is_administrative_noise(blocker)
+        ):
+            # Keep the blocker short: its first sentence is the statement.
+            parts.append(f"Blocker: {blocker.rstrip(' .;:')}.")
+        status = _status_label(record)
+        if status and normalise_for_compare(f"status: {status}") not in issue_text:
+            parts.append(f"Status: {status}.")
+
+    body = _tidy_paragraphs(
+        "\n\n".join(part.strip() for part in parts if part.strip())
+    )
+    # The preferred maximum is the writing budget; the hard portal limit is
+    # enforced again here on the FINAL text, never on the draft.
+    fit = fit_to_limit(
+        body,
+        limit=limit,
+        target=detailed_max if count_chars(body) > detailed_max else None,
+    )
     final_text = renumber_ordered_items(drop_orphan_headings(fit.text))
     if final_text != fit.text:
         fit.text = final_text
         fit.final_count = count_chars(final_text)
         if fit.final_count > limit:
-            fit = fit_to_limit(final_text, limit=limit, target=target)
+            fit = fit_to_limit(final_text, limit=limit)
     return fit.text, fit
 
 
@@ -416,19 +671,42 @@ def compose_daily_task(
 # ---------------------------------------------------------------------------
 
 
+_NUM_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+}
+_CLAIMED_DEFECTS = re.compile(
+    r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+"
+    r"(?:defects?|bugs?)\s+(?:were\s+|was\s+)?"
+    r"(?:reported|recorded|raised|logged|found|identified)",
+    re.I,
+)
+
+
+def claimed_defect_count(text: str) -> Optional[int]:
+    """Defect total a piece of text claims, if it states one explicitly."""
+    match = _CLAIMED_DEFECTS.search(text or "")
+    if not match:
+        return None
+    token = match.group(1).lower()
+    if token.isdigit():
+        return int(token)
+    return _NUM_WORDS.get(token)
+
+
 def draft_weekly_summary(
     collection: WeekCollection,
     limit: int = DEFAULT_LIMIT,
-    target_min: int = 3500,
-    target_max: int = 3800,
+    target_min: int = PREFERRED_WEEKLY_MIN,
+    target_max: int = PREFERRED_WEEKLY_MAX,
 ) -> tuple[str, FitResult, list[str]]:
-    """Draft a weekly summary from the week's daily records.
+    """Draft a concise weekly summary (normally 800-1,500 characters).
 
-    Every sentence is derived from a record: hours and day count, a per-day
-    line phrased so it is not an exact copy of the daily field, the issues
-    raised, defect/test identifiers actually present, projects actually
-    mentioned, and the activity types the wording supports. Returns the
-    text, the fit result, and honesty notes about what could not be stated.
+    The summary reports the week, not the days: it states the period and
+    hours, the projects and kinds of work involved, what each day focused on
+    in one clause, the outcomes and defect count, the blockers, and how the
+    week closed. Sentences are assembled from aggregated facts and short
+    topic clauses, so the summary does not repeat the daily fields verbatim.
     """
     notes: list[str] = []
     active = [r for r in collection.records if not r.is_holiday]
@@ -450,12 +728,14 @@ def draft_weekly_summary(
             + "."
         )
 
+    paragraphs: list[str] = []
+
     span = (
         f"Week {collection.number} covered {len(active)} working days from "
         f"{_date_label(collection.start)} to {_date_label(collection.end)}"
     )
     if totals is not None and len(recorded_hours) == len(active):
-        span += f", totalling {format_hours(totals)} of recorded work."
+        span += f", with {format_hours(totals)} recorded."
     elif totals is not None:
         span += (
             f", with {format_hours(totals)} recorded across "
@@ -463,92 +743,183 @@ def draft_weekly_summary(
         )
     else:
         span += "."
-    paragraphs = [span]
+    paragraphs.append(span)
 
-    day_lines = []
-    seen_topics: set[str] = set()
+    week_text = "\n".join(r.combined_text() for r in active)
+
+    # The week report already contains a written summary. It is context, not
+    # authority: it is condensed to the preferred range and cross-checked
+    # against the daily records, which stay the source of truth.
+    report_summary = ""
+    if collection.weekly is not None:
+        # Keep the report's own paragraph breaks: each paragraph lead is a
+        # theme, and collapsing them to one block loses whole topics.
+        report_summary = (collection.weekly.summary or "").strip()
+    if count_chars(report_summary) >= 300:
+        blocks = [span] + [
+            block for block in report_summary.split("\n\n") if block.strip()
+        ]
+        result = summarise_blocks(
+            blocks,
+            min_chars=target_min,
+            max_chars=target_max,
+            lead_sentences=1,
+            per_paragraph=2,
+        )
+        fit = fit_to_limit(result.text, limit=limit, target=target_max)
+        if fit.changed:
+            notes.append(fit.summary())
+        unique_bugs = sorted(set(_BUG_ID.findall(week_text)))
+        claimed = claimed_defect_count(fit.text)
+        if claimed is not None and unique_bugs and claimed != len(unique_bugs):
+            notes.append(
+                f"Week report states {claimed} defects; the daily records contain "
+                f"{len(unique_bugs)} distinct defect IDs. The report's total was "
+                "replaced with a count taken from the daily records."
+            )
+            # Drop the sentence carrying the wrong total; the daily records
+            # decide the number, and a count is restated from them.
+            kept_blocks: list[str] = []
+            for block in fit.text.split("\n\n"):
+                sentences = [
+                    s
+                    for s in split_sentences(block)
+                    if claimed_defect_count(s) is None
+                ]
+                if sentences:
+                    kept_blocks.append(" ".join(sentences))
+            noun = "defect" if len(unique_bugs) == 1 else "defects"
+            restated = (
+                f"{len(unique_bugs)} {noun} were recorded across the week "
+                f"({_join_ids(unique_bugs[:5])}"
+                f"{', among others' if len(unique_bugs) > 5 else ''})."
+            )
+            rebuilt = "\n\n".join(kept_blocks + [restated])
+            fit = fit_to_limit(rebuilt, limit=limit, target=target_max)
+            if fit.changed:
+                notes.append(fit.summary())
+        if count_chars(fit.text) < target_min:
+            notes.append(
+                f"Summary is {count_chars(fit.text)} characters, below the preferred "
+                f"{target_min}-{target_max}; nothing was added to pad it."
+            )
+        return fit.text, fit, notes
+
+    projects = _projects_in(week_text)
+    lowered = week_text.lower()
+    activity_labels = [
+        _ACTIVITY_LABELS[name]
+        for name, needles in _ACTIVITY_KEYWORDS.items()
+        if any(needle in lowered for needle in needles)
+    ]
+    focus: list[str] = []
+    if projects:
+        focus.append("Work continued on " + _join_ids(projects))
+    if activity_labels:
+        focus.append("The week covered " + _join_ids(activity_labels))
+    if focus:
+        paragraphs.append(". ".join(focus) + ".")
+
+    # Aggregates alone read like a status page. The portal summary is expected
+    # to say what the week's work actually consisted of, so each day keeps one
+    # clause taken from its own record — never from another day's.
+    day_clauses: list[str] = []
     for record in active:
-        topic = _topic_phrase(record)
-        if not topic:
-            notes.append(f"{record.day.isoformat()} has no task detail to summarise.")
+        source = record.task_detail.strip() or record.raw_notes.strip()
+        if not source:
             continue
-        status = _status_label(record)
-        bug_count = len(record.bug_ids)
-        topic_key = " ".join(normalise_for_compare(topic).split()[:5])
-        if topic_key and topic_key in seen_topics:
-            # Say it carried on rather than printing the same clause twice.
-            line = f"{record.weekday} ({_date_label(record.day)}): the same area of work continued"
-        else:
-            seen_topics.add(topic_key)
-            line = f"{record.weekday} ({_date_label(record.day)}): {topic}"
-        if bug_count:
-            noun = "defect" if bug_count == 1 else "defects"
-            line += f", with {bug_count} {noun} recorded"
-        if status:
-            line += f", closing as {status}"
-        day_lines.append(line + ".")
-    if day_lines:
-        paragraphs.append(" ".join(day_lines))
+        plain_day = clean_text(to_plain_text(drop_heading_only_blocks(source)))
+        candidates = [
+            s
+            for s in split_sentences(plain_day)
+            if len(s.split()) >= 6
+            and not is_administrative_noise(s)
+            and not s.rstrip().endswith(":")
+            and not re.search(r"\b(?:and|or|the|of|to|with|for)$", s.rstrip())
+        ]
+        if not candidates:
+            continue
+        clause = _trim_clause(candidates[0].rstrip(" .;:"), 190)
+        if not clause or len(clause.split()) < 5:
+            continue
+        lowered = clause.lower()
+        for opener in _DAY_OPENERS:
+            if lowered.startswith(opener):
+                clause = clause[len(opener):].lstrip()
+                lowered = clause.lower()
+                break
+        if not clause or len(clause.split()) < 5:
+            continue
+        clause = _lower_first(clause) if clause[:1].isupper() else clause
+        day_clauses.append(f"{record.weekday} — {clause}")
+    if day_clauses:
+        paragraphs.append("Day by day: " + "; ".join(day_clauses) + ".")
+
+
+    bug_ids = sorted(set(_BUG_ID.findall(week_text)))
+    case_ids = sorted(
+        {
+            token
+            for token in re.findall(r"\b[A-Z]{2,4}-\d{1,3}\b", week_text)
+            if not token.startswith("BUG-")
+        }
+    )
+    outcomes: list[str] = []
+    if bug_ids:
+        noun = "defect" if len(bug_ids) == 1 else "defects"
+        ids_note = (
+            f" ({_join_ids(bug_ids[:4])}{', among others' if len(bug_ids) > 4 else ''})"
+        )
+        outcomes.append(f"{len(bug_ids)} {noun} were recorded{ids_note}")
+    if len(case_ids) >= 3:
+        outcomes.append(f"{len(case_ids)} individual test cases were referenced")
+    status_counts: dict[str, int] = {}
+    for record in active:
+        label = _status_label(record)
+        if label:
+            status_counts[label] = status_counts.get(label, 0) + 1
+    if status_counts:
+        ordered_status = sorted(status_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        pieces = [
+            f"{label} on {count} day{'s' if count != 1 else ''}"
+            for label, count in ordered_status
+        ]
+        outcomes.append("work closed as " + _join_ids(pieces))
+    if outcomes:
+        paragraphs.append("; ".join(outcomes) + ".")
 
     themes: list[str] = []
     seen_themes: set[str] = set()
     for record in active:
         for theme in _issue_themes(record, max_items=1):
             key = " ".join(normalise_for_compare(theme).split()[:4])
-            if key and key not in seen_themes:
+            if key and key not in seen_themes and not is_administrative_noise(theme):
                 seen_themes.add(key)
                 themes.append(theme)
-    if themes:
-        joined = "; ".join(themes[:3])
-        paragraphs.append(f"Issues and blockers recorded during the week included {joined}.")
+    blocker_days = [r for r in active if _first_useful_sentence(r.issue)]
+    if blocker_days:
+        sentence = (
+            f"Blocking issues were recorded on {len(blocker_days)} of "
+            f"{len(active)} days"
+        )
+        if themes:
+            sentence += ", including " + themes[0]
+        paragraphs.append(sentence + ".")
 
-    status_counts: dict[str, int] = {}
-    for record in active:
-        label = _status_label(record).lower()
-        if label:
-            status_counts[label] = status_counts.get(label, 0) + 1
-    if status_counts:
-        label, count = max(status_counts.items(), key=lambda kv: kv[1])
-        pretty = _STATUS_CANON.get(label, label[0].upper() + label[1:])
-        if count == len(active):
-            paragraphs.append(f"All {count} working days closed as {pretty}.")
-        else:
-            paragraphs.append(
-                f"{count} of {len(active)} working days closed as {pretty}."
-            )
+    if len(recorded_hours) < len(active) and recorded_hours:
+        paragraphs.append(
+            "Recorded hours were incomplete for the week, so no daily total was assumed."
+        )
 
-    week_text = "\n\n".join(r.combined_text() for r in active)
-    bug_ids = sorted(set(_BUG_ID.findall(week_text)))
-    test_ids = sorted(set(_TEST_ID.findall(week_text)))
-    evidence = []
-    if bug_ids:
-        evidence.append(f"{len(bug_ids)} defect identifiers ({', '.join(bug_ids[:8])})")
-    if test_ids:
-        evidence.append(f"{len(test_ids)} test identifiers ({', '.join(test_ids[:8])})")
-    if evidence:
-        paragraphs.append("The record names " + " and ".join(evidence) + ".")
-
-    lowered = week_text.lower()
-    activities = [
-        name
-        for name, needles in _ACTIVITY_KEYWORDS.items()
-        if any(needle in lowered for needle in needles)
-    ]
-    if activities:
-        if len(activities) > 1:
-            listed = ", ".join(activities[:-1]) + " and " + activities[-1]
-        else:
-            listed = activities[0]
-        paragraphs.append(f"The week exercised {listed}.")
-
-    projects = _projects_in(week_text)
-    if projects:
-        paragraphs.append("Work spanned " + ", ".join(projects) + ".")
-
-    draft = "\n\n".join(p for p in paragraphs if p.strip())
+    draft = _tidy_paragraphs("\n\n".join(p for p in paragraphs if p.strip()))
     fit = fit_to_limit(draft, limit=limit, target=target_max)
     if fit.changed:
         notes.append(fit.summary())
+    if count_chars(fit.text) < target_min:
+        notes.append(
+            f"Summary is {count_chars(fit.text)} characters, below the preferred "
+            f"{target_min}-{target_max}; nothing was added to pad it."
+        )
     return fit.text, fit, notes
 
 
@@ -565,16 +936,21 @@ def _projects_in(text: str, names: Iterable[str] | None = None) -> list[str]:
         "Creator Research",
         "Ochat",
     ]
+    canonical_map = {
+        "ocare": "O'Care",
+        "otalk": "OTalk",
+        "ozone": "O'Zone",
+        "kiwi import": "Kiwi Import",
+        "hermes": "Hermes",
+        "creator research": "Creator Research",
+        "ochat": "OChat",
+    }
     found: list[str] = []
     seen: set[str] = set()
     lowered = text.lower()
     for name in pool:
         if re.search(rf"(?<![a-z0-9]){re.escape(name.lower())}(?![a-z0-9])", lowered):
-            canonical = (
-                name.replace("Ocare", "O'Care")
-                .replace("Ozone", "O'Zone")
-                .replace("Ochat", "OChat")
-            )
+            canonical = canonical_map.get(name.lower(), name)
             key = canonical.lower().replace("'", "")
             if key not in seen:
                 seen.add(key)
@@ -776,6 +1152,14 @@ class Submission:
     def summary_count(self) -> int:
         return count_chars(self.weekly_summary)
 
+    @property
+    def summary_band(self) -> str:
+        return length_band(
+            self.summary_count,
+            self.profile.weekly_summary_preferred_max,
+            self.profile.weekly_summary_char_limit,
+        )
+
 
 def _check_dates(collection: WeekCollection, dailies: list[DailySubmission]) -> ValidationCheck:
     problems = []
@@ -837,17 +1221,33 @@ def _check_char_limits(
             problems.append(f"{d.day.isoformat()} {d.count}/{profile.daily_task_char_limit}")
     if count_chars(summary) > profile.weekly_summary_char_limit:
         problems.append(f"weekly summary {count_chars(summary)}/{profile.weekly_summary_char_limit}")
-    return ValidationCheck(
-        "Character limits",
-        ATTENTION if problems else PASS,
-        "; ".join(problems)
-        if problems
-        else (
-            f"max daily {max((d.count for d in dailies), default=0)}/"
-            f"{profile.daily_task_char_limit}, summary {count_chars(summary)}/"
-            f"{profile.weekly_summary_char_limit}"
-        ),
+    if problems:
+        return ValidationCheck("Character limits", ATTENTION, "; ".join(problems))
+    max_daily = max((d.count for d in dailies), default=0)
+    daily_band = length_band(
+        max_daily,
+        profile.daily_task_preferred_max,
+        profile.daily_task_char_limit,
     )
+    summary_band = length_band(
+        count_chars(summary),
+        profile.weekly_summary_preferred_max,
+        profile.weekly_summary_char_limit,
+    )
+    detailed = [
+        d.day.isoformat() for d in dailies if d.band == "Detailed"
+    ]
+    detail = (
+        f"max daily {max_daily}/{profile.daily_task_char_limit} ({daily_band}), "
+        f"summary {count_chars(summary)}/{profile.weekly_summary_char_limit} "
+        f"({summary_band}); preferred daily {profile.daily_task_preferred_min}-"
+        f"{profile.daily_task_preferred_max}, summary "
+        f"{profile.weekly_summary_preferred_min}-"
+        f"{profile.weekly_summary_preferred_max}"
+    )
+    if detailed:
+        detail += "; above preferred but acceptable: " + ", ".join(detailed)
+    return ValidationCheck("Character limits", PASS, detail)
 
 
 def _check_hours(dailies: list[DailySubmission]) -> ValidationCheck:
@@ -866,7 +1266,10 @@ def _check_hours(dailies: list[DailySubmission]) -> ValidationCheck:
 
 
 def _check_summary(
-    summary: str, dailies: list[DailySubmission], profile: UniversitySubmissionProfile
+    summary: str,
+    dailies: list[DailySubmission],
+    profile: UniversitySubmissionProfile,
+    week_text: str = "",
 ) -> ValidationCheck:
     problems = []
     if not summary.strip():
@@ -882,11 +1285,28 @@ def _check_summary(
     ]
     if repeated:
         problems.append(f"{len(repeated)} sentence(s) copied verbatim from daily task details")
-    return ValidationCheck(
-        "Weekly summary",
-        ATTENTION if problems else PASS,
-        "; ".join(problems) if problems else f"{count}/{profile.weekly_summary_char_limit} characters",
+    week_bugs = set(_BUG_ID.findall(week_text)) or {
+        b for d in dailies for b in _BUG_ID.findall(d.task_text)
+    }
+    claimed = claimed_defect_count(summary)
+    if claimed is not None and week_bugs and claimed != len(week_bugs):
+        problems.append(
+            f"summary states {claimed} defects but the daily fields name "
+            f"{len(week_bugs)}"
+        )
+    if problems:
+        return ValidationCheck("Weekly summary", ATTENTION, "; ".join(problems))
+    band = length_band(
+        count, profile.weekly_summary_preferred_max, profile.weekly_summary_char_limit
     )
+    detail = (
+        f"{count}/{profile.weekly_summary_char_limit} characters ({band}), "
+        f"preferred {profile.weekly_summary_preferred_min}-"
+        f"{profile.weekly_summary_preferred_max}"
+    )
+    if count < profile.weekly_summary_preferred_min:
+        detail += "; shorter than preferred, nothing was added to pad it"
+    return ValidationCheck("Weekly summary", PASS, detail)
 
 
 def _check_attachment(rec: AttachmentRecommendation, profile: UniversitySubmissionProfile) -> ValidationCheck:
@@ -918,8 +1338,16 @@ def _check_source_accuracy(
             problems.append(f"{d.day.isoformat()} hours differ from source")
         source_words = words(record.combined_text())
         sub_words = words(d.task_text)
-        if sub_words and len(sub_words & source_words) / len(sub_words) < 0.9:
-            problems.append(f"{d.day.isoformat()} contains wording not in its source record")
+        # Authored prose may rephrase, so it is checked for traceability at a
+        # lower overlap; generated text must stay almost verbatim.
+        # Generated fields are condensed prose rebuilt from the same day's
+        # record (daily notes or that day's report section), so traceability
+        # is measured at a lower overlap than a near-verbatim copy.
+        threshold = 0.6 if d.authored else 0.75
+        if sub_words and len(sub_words & source_words) / len(sub_words) < threshold:
+            problems.append(
+                f"{d.day.isoformat()} contains wording not in its source record"
+            )
     week_text = "\n".join(r.combined_text() for r in collection.records)
     stray_bugs = {b for b in _BUG_ID.findall(summary)} - set(_BUG_ID.findall(week_text))
     if stray_bugs:
@@ -951,6 +1379,7 @@ class SubmissionGenerator:
         week: Optional[int] = None,
         summary_text: Optional[str] = None,
         today: Optional[date] = None,
+        daily_overrides: Optional[dict[date, str]] = None,
     ) -> Submission:
         if not self.profile.submission_enabled:
             raise RuntimeError("University submission is disabled in the profile")
@@ -982,14 +1411,39 @@ class SubmissionGenerator:
                             final_count=0,
                         ),
                         incomplete=True,
+                        preferred_max=self.profile.daily_task_preferred_max,
                     )
                 )
                 continue
-            text, fit = compose_daily_task(
-                record,
-                limit=self.profile.daily_task_char_limit,
-                target=None,
-            )
+            override = (daily_overrides or {}).get(record.day)
+            if override is not None:
+                # Authored field: keep it in full, measure the final text.
+                fit = fit_to_limit(
+                    override,
+                    limit=self.profile.daily_task_char_limit,
+                    target=None,
+                )
+                text = fit.text
+                authored = True
+                notes.append(
+                    f"{record.day.isoformat()}: authored text, "
+                    f"{fit.final_count}/{self.profile.daily_task_char_limit}"
+                )
+            else:
+                authored = False
+                report_detail, report_issue = weekly_day_parts(
+                    collection, record.day
+                )
+                text, fit = compose_daily_task(
+                    record,
+                    limit=self.profile.daily_task_char_limit,
+                    target=None,
+                    preferred_min=self.profile.daily_task_preferred_min,
+                    preferred_max=self.profile.daily_task_preferred_max,
+                    detailed_max=self.profile.daily_task_detailed_max,
+                    report_detail=report_detail,
+                    report_issue=report_issue,
+                )
             if fit.changed:
                 notes.append(f"{record.day.isoformat()}: {fit.summary()}")
             dailies.append(
@@ -1001,6 +1455,8 @@ class SubmissionGenerator:
                     source_path=str(record.path.relative_to(self.reader.root)),
                     fit=fit,
                     issues=split_sentences(record.issue)[:2],
+                    authored=authored,
+                    preferred_max=self.profile.daily_task_preferred_max,
                 )
             )
 
@@ -1018,8 +1474,8 @@ class SubmissionGenerator:
             summary, fit, summary_notes = draft_weekly_summary(
                 collection,
                 limit=self.profile.weekly_summary_char_limit,
-                target_min=self.profile.target_min_chars,
-                target_max=self.profile.target_max_chars,
+                target_min=self.profile.weekly_summary_preferred_min,
+                target_max=self.profile.weekly_summary_preferred_max,
             )
         notes.extend(summary_notes)
 
@@ -1031,7 +1487,12 @@ class SubmissionGenerator:
             _check_daily_details(dailies),
             _check_char_limits(dailies, summary, self.profile),
             _check_hours(dailies),
-            _check_summary(summary, dailies, self.profile),
+            _check_summary(
+                summary,
+                dailies,
+                self.profile,
+                week_text="\n".join(r.combined_text() for r in collection.records),
+            ),
             _check_attachment(attachment, self.profile),
             _check_source_accuracy(collection, dailies, summary),
         ]
@@ -1055,18 +1516,42 @@ class SubmissionGenerator:
             ),
         )
 
-    def generate_day(self, day: date) -> DailySubmission:
+    def generate_day(
+        self,
+        day: date,
+        daily_overrides: Optional[dict[date, str]] = None,
+    ) -> DailySubmission:
         self.profile.validate()
         record = self.reader.read_daily(day)
         if record is None:
             raise FileNotFoundError(f"daily/{day.isoformat()}.md does not exist")
         if record.is_holiday:
             raise ValueError(f"{day.isoformat()} is recorded as a public holiday")
-        text, fit = compose_daily_task(
-            record,
-            limit=self.profile.daily_task_char_limit,
-            target=self.profile.target_max_chars,
-        )
+        week = self.reader.week_number_for(day)
+        override = (daily_overrides or {}).get(day)
+        if override is not None:
+            # Authored field: keep it in full, measure the final text.
+            fit = fit_to_limit(
+                override,
+                limit=self.profile.daily_task_char_limit,
+                target=None,
+            )
+            text = fit.text
+            authored = True
+        else:
+            authored = False
+            report_detail, report_issue = weekly_day_parts(
+                self.reader.collect_week(week), day
+            )
+            text, fit = compose_daily_task(
+                record,
+                limit=self.profile.daily_task_char_limit,
+                preferred_min=self.profile.daily_task_preferred_min,
+                preferred_max=self.profile.daily_task_preferred_max,
+                detailed_max=self.profile.daily_task_detailed_max,
+                report_detail=report_detail,
+                report_issue=report_issue,
+            )
         return DailySubmission(
             day=day,
             weekday=record.weekday,
@@ -1075,6 +1560,8 @@ class SubmissionGenerator:
             source_path=str(record.path.relative_to(self.reader.root)),
             fit=fit,
             issues=split_sentences(record.issue)[:2],
+            authored=authored,
+            preferred_max=self.profile.daily_task_preferred_max,
         )
 
 
@@ -1095,7 +1582,7 @@ def render_day_block(index: int, submission: DailySubmission, limit: int) -> str
                 heading,
                 f"Date: {submission.day.isoformat()}",
                 "Total Hours: NOT RECORDED",
-                f"Character Count: 0 / {limit}",
+                f"Character Count: 0 / {limit} (no text)",
                 note,
                 "",
                 "TASK DETAILS:",
@@ -1106,7 +1593,7 @@ def render_day_block(index: int, submission: DailySubmission, limit: int) -> str
         f"DAY {index} — {submission.weekday.upper()}",
         f"Date: {submission.day.isoformat()}",
         f"Total Hours: {submission.hours_text}",
-        f"Character Count: {submission.count} / {limit}",
+        f"Character Count: {submission.count} / {limit} ({submission.band})",
         "",
         "TASK DETAILS:",
         submission.task_text,
@@ -1139,7 +1626,7 @@ def render_submission(sub: Submission) -> str:
             "========================================",
             "WEEKLY SUMMARY",
             "========================================",
-            f"Character Count: {sub.summary_count} / {limit_weekly}",
+            f"Character Count: {sub.summary_count} / {limit_weekly} ({sub.summary_band})",
             "",
             sub.weekly_summary or "No weekly summary could be generated from the available records.",
             "",

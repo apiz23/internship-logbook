@@ -7,13 +7,15 @@ that is not in `daily/`.
 
 The portal this was built against accepts:
 
-| Field | Limit | Notes |
-|-------|-------|-------|
-| Daily task details | 4,000 characters | one field per working day, spaces/punctuation/newlines counted |
-| Weekly summary | 4,000 characters | one field per week |
-| Weekly attachment | exactly 1 file | screenshots, report, PDF |
+| Field | Maximum | Preferred | Notes |
+|-------|---------|-----------|-------|
+| Daily task details | 4,000 characters | 500-1,200 (up to 1,500 on a busy day) | one field per working day, spaces/punctuation/newlines counted |
+| Weekly summary | 4,000 characters | 800-1,500 | one field per week |
+| Weekly attachment | exactly 1 file | - | screenshots, report, PDF |
 
-Both limits and the working-day set are configuration, not code.
+The maximum is an **allowance, not a target**. A concise field is a better
+field: it is read by a supervisor, not scored by length. Both the maximum and
+the preferred ranges are configuration, not code.
 
 ## Where the content comes from
 
@@ -101,14 +103,14 @@ configuration/source problem (missing start date, missing daily file for
 2. Compute the week from the start date, not from the calendar week number.
 3. Collect the week (`LogbookReader.collect_week`) and read every daily
    record plus the weekly report.
-4. Run the generator to produce the scaffold: five daily fields, a summary
-   draft, one attachment, seven validation checks.
-5. Write the weekly summary yourself from the same records - full prose,
-   3,500-4,000 characters, no sentence copied from a daily field - save it to
-   a temp file, and re-run with `--weekly-summary-file`. The script measures
-   and fits the FINAL text; never quote a character count you did not get
-   from the script. Do this in the same response as the request: the user
-   must not have to ask for a fuller summary afterwards.
+4. Run the generator to produce the fields directly: concise daily task
+   details, a concise weekly summary, one attachment, seven validation
+   checks. Do **not** hand-write a longer version: 4,000 characters is a
+   ceiling, not a quota.
+5. Only if the generated text is genuinely thin for a substantial day, edit
+   it with `--daily-file YYYY-MM-DD=path` or `--weekly-summary-file path`.
+   The script measures and fits the FINAL text; never quote a character count
+   you did not get from the script.
 6. Present the output verbatim, copy-ready fields first; validation and notes
    come after the `END OF COPY-READY CONTENT` marker.
 7. Never submit to the portal. Never claim the portal accepted it.
@@ -119,7 +121,7 @@ configuration/source problem (missing start date, missing daily file for
 |-------|-----------|
 | Dates | any expected working day has no daily record, duplicate dates, or a weekday label that disagrees with the date |
 | Daily task details | a field is empty, or the same text appears on more than one day |
-| Character limits | any daily field or the summary exceeds its limit (counted, not estimated) |
+| Character limits | any daily field or the summary exceeds its 4,000-character limit (counted, not estimated); the preferred band is reported, not failed |
 | Total hours | any day has no numeric hours (`TBC` included) |
 | Weekly summary | empty, over limit, or contains a sentence copied verbatim from a daily field |
 | Single attachment | nothing available, or more than one recommended |
@@ -156,9 +158,10 @@ Order is content first, diagnostics last:
 Counters and explanations never sit inside a field, so every field can be
 copied alone. The template is `templates/university-submission-output.md`.
 
-Daily fields are condensed only as far as the 4,000 limit forces: the
-condenser drops low-value blocks, then refills any dropped block that still
-fits, so the field carries as much real content as possible.
+Each field shows its band beside the count, outside the copyable text:
+`Character Count: 1043 / 4000 (Concise)`. Daily fields are written to the
+preferred range rather than filled to the ceiling, and a detailed day is
+labelled `Detailed` instead of being treated as a problem.
 
 ## Configuration
 
@@ -169,8 +172,11 @@ fits, so the field carries as much real content as possible.
   "submission_enabled": true,
   "daily_task_char_limit": 4000,
   "weekly_summary_char_limit": 4000,
-  "target_min_chars": 3500,
-  "target_max_chars": 3800,
+  "daily_task_preferred_min": 500,
+  "daily_task_preferred_max": 1200,
+  "daily_task_detailed_max": 1500,
+  "weekly_summary_preferred_min": 800,
+  "weekly_summary_preferred_max": 1500,
   "working_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
   "daily_fields": ["date", "task_details", "total_hours"],
   "weekly_fields": ["weekly_summary", "attachment"],

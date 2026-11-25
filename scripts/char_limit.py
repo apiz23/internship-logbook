@@ -22,10 +22,51 @@ from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
 DEFAULT_LIMIT = 4000
-# Safety margin used when a long field has to be written: aim for the
-# 3,500-3,800 band rather than sitting on the 4,000 edge.
-TARGET_MIN = 3500
-TARGET_MAX = 3800
+# The portal limit is an allowance, not a target. Preferred ranges describe a
+# concise field; anything above the preferred maximum is still acceptable up
+# to ``DEFAULT_LIMIT`` and is labelled "Detailed" rather than "too short" or
+# "almost full".
+PREFERRED_DAILY_MIN = 500
+PREFERRED_DAILY_MAX = 1200
+DETAILED_DAILY_MAX = 1500
+PREFERRED_WEEKLY_MIN = 800
+PREFERRED_WEEKLY_MAX = 1500
+
+CONCISE = "Concise"
+DETAILED = "Detailed"
+OVER_LIMIT = "Over limit"
+
+
+def length_band(count: int, preferred_max: int, limit: int = DEFAULT_LIMIT) -> str:
+    """Classify a measured field: Concise, Detailed, or Over limit.
+
+    * ``Concise`` - within the preferred range (short is good, not a problem).
+    * ``Detailed`` - above the preferred range but inside the hard limit.
+      Allowed, especially on a busy or technically complex day.
+    * ``Over limit`` - above the portal maximum; would be rejected.
+    """
+    if count > limit:
+        return OVER_LIMIT
+    if count <= preferred_max:
+        return CONCISE
+    return DETAILED
+
+
+def band_summary(
+    count: int,
+    preferred_min: int,
+    preferred_max: int,
+    limit: int = DEFAULT_LIMIT,
+) -> str:
+    """Short label for a rendered counter, e.g. ``Concise``."""
+    band = length_band(count, preferred_max, limit)
+    if band == CONCISE and count < preferred_min:
+        return f"{CONCISE}, below preferred {preferred_min}-{preferred_max}"
+    if band == CONCISE:
+        return f"{CONCISE}, preferred {preferred_min}-{preferred_max}"
+    if band == DETAILED:
+        return f"{DETAILED}, above preferred {preferred_max} but within {limit}"
+    return f"{OVER_LIMIT} ({limit} max)"
 
 
 def normalise_newlines(text: str) -> str:
@@ -87,6 +128,8 @@ def check_limit(text: str, limit: int = DEFAULT_LIMIT) -> CharCount:
 # ---------------------------------------------------------------------------
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'`])")
+# A list marker ("6.", "A)", "12.") is not a sentence boundary.
+_LIST_MARKER = re.compile(r"(?m)^([ \t]*(?:\d{1,3}|[A-Za-z])[.)])[ \t]+")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
 _BULLET = re.compile(r"^\s{0,3}(?:[-*+]|\d+[.)])\s+")
 _NESTED = re.compile(r"^\s{2,}(?:[-*+]|\d+[.)])\s+")
@@ -108,9 +151,44 @@ def _block_score(block: str) -> int:
     return score
 
 
+def split_block_sentences(block: str) -> list[str]:
+    """Split a block into sentences without breaking list markers.
+
+    ``6. Test case status`` must stay one sentence; a naive split on the
+    period turns it into a bare ``6.`` plus an orphaned remainder.
+    """
+    markers: list[str] = []
+
+    def _protect(match: re.Match[str]) -> str:
+        markers.append(match.group(1))
+        return f"\x00{len(markers) - 1}\x00 "
+
+    protected = _LIST_MARKER.sub(_protect, block)
+    parts = [p for p in _SENTENCE_END.split(protected) if p.strip()]
+    out = []
+    for part in parts:
+        restored = re.sub(
+            r"\x00(\d+)\x00", lambda m: markers[int(m.group(1))], part
+        )
+        out.append(restored.strip())
+    return out
+
+
 def _sentence_score(sentence: str) -> int:
-    score = len(_TECH_SIGNAL.findall(sentence)) * 2
-    score += len(sentence) // 200
+    """Importance of a sentence: identifiers, numbers and length.
+
+    Numbers count: a sentence carrying measured figures ("364 rows, 205 Done")
+    is the payload a supervisor reads, so it is dropped last.
+    """
+    score = float(len(_TECH_SIGNAL.findall(sentence)) * 3)
+    score += 2 * len(re.findall(r"\d", sentence))
+    if re.search(
+        r"\b(PASS|FAIL|BLOCKED|SKIPPED|NOT RUN|Outcome|Result|Total|Net)\b", sentence
+    ):
+        score += 4
+    # Fractional length term breaks score ties, so the drop order stays stable
+    # instead of falling back to document position.
+    score += len(sentence) / 80.0
     return score
 
 
@@ -180,55 +258,23 @@ def fit_to_limit(
     if result.final_count <= budget:
         return result
 
-    # 1. Drop whole blocks, lowest score first, keeping the leading blocks.
+    # 1. Trim sentences first. Every block keeps its opening sentence, so no
+    #    section, numbered item or finding disappears - only its supporting
+    #    detail is thinned. Lowest-signal sentences go first.
     blocks = [b for b in work.split("\n\n") if b.strip()]
-    all_blocks = list(blocks)
-    keep = set(range(min(keep_head_blocks, len(blocks))))
-    order = sorted(
-        (i for i in range(len(blocks)) if i not in keep),
-        key=lambda i: (_block_score(blocks[i]), -i),
-    )
-    dropped: set[int] = set()
-    for i in order:
-        if count_chars("\n\n".join(b for j, b in enumerate(blocks) if j not in dropped)) <= budget:
-            break
-        dropped.add(i)
-    if dropped:
-        # 1b. Refill: put back any dropped block that still fits, in source
-        # order, so the field carries as much real content as the limit allows
-        # instead of stopping at the first coarse cut.
-        current = [j for j in range(len(all_blocks)) if j not in dropped]
-        for j in range(len(all_blocks)):
-            if j not in dropped:
-                continue
-            trial = sorted(current + [j])
-            if count_chars("\n\n".join(all_blocks[k] for k in trial)) <= budget:
-                dropped.discard(j)
-                current = trial
-        result.dropped_blocks = len(dropped)
-        work = "\n\n".join(all_blocks[k] for k in sorted(current))
-        result.text, result.final_count = work, count_chars(work)
-        if result.final_count <= budget:
-            result.changed = True
-            result.notes.append(
-                "removed lowest-value blocks"
-                if result.dropped_blocks
-                else "reflowed blocks to fit the limit"
-            )
-            return result
-
-    # 2. Drop sentences, lowest score first, never the first sentence of a block.
-    sentences: list[list[str]] = []
-    for block in blocks:
-        parts = [p for p in _SENTENCE_END.split(block) if p.strip()]
-        sentences.append(parts)
-    dropped_s = 0
+    sentences: list[list[str]] = [
+        split_block_sentences(block) for block in blocks
+    ]
+    dropped_sentences = 0
     while True:
         flat = "\n\n".join(" ".join(parts) for parts in sentences if parts)
         if count_chars(flat) <= budget:
             break
+        # Drop by worst value density first: the sentence that gives up the
+        # most characters per unit of importance. Long, low-signal sentences
+        # go before short, fact-dense ones.
         candidates = [
-            (len(_TECH_SIGNAL.findall(s)), -bi, -si)
+            (_sentence_score(s) / max(len(s), 40), -bi, -si)
             for bi, parts in enumerate(sentences)
             for si, s in enumerate(parts)
             if si > 0 and len(parts) > 1
@@ -239,11 +285,65 @@ def fit_to_limit(
         sentences[-nbi] = [
             s for idx, s in enumerate(sentences[-nbi]) if idx != -nsi
         ]
-        dropped_s += 1
-    if dropped_s:
-        result.dropped_sentences = dropped_s
+        dropped_sentences += 1
+    if dropped_sentences:
+        result.dropped_sentences = dropped_sentences
         work = "\n\n".join(" ".join(parts) for parts in sentences if parts)
         result.text, result.final_count = work, count_chars(work)
+        if result.final_count <= budget:
+            result.changed = True
+            result.notes.append(
+                "condensed sentence by sentence; every section kept"
+            )
+            return result
+
+    # 2. Still over: drop whole low-value blocks, keeping the leading blocks
+    #    and the first block under each heading.
+    blocks = [b for b in work.split("\n\n") if b.strip()]
+    all_blocks = list(blocks)
+    keep = set(range(min(keep_head_blocks, len(blocks))))
+    heading_like = re.compile(
+        r"^(?:#{1,6}\s|[A-Z][.)]|\d+[.)]|\w+\s+[\u2014-]\s|"
+        r"(?:Workstream|Section|Part|Block|Phase|Appendix)\b)",
+        re.I,
+    )
+    protected = {
+        i for i in range(1, len(blocks)) if heading_like.match(blocks[i - 1].strip())
+    }
+    order = sorted(
+        (i for i in range(len(blocks)) if i not in keep),
+        key=lambda i: (_block_score(blocks[i]) - (10 if i in protected else 0), -i),
+    )
+    dropped: set[int] = set()
+    for i in order:
+        current = "\n\n".join(
+            b for j, b in enumerate(blocks) if j not in dropped
+        )
+        if count_chars(current) <= budget:
+            break
+        dropped.add(i)
+    if dropped:
+        # 2b. Refill: put back any dropped block that still fits, in source
+        # order, so the field carries as much real content as the limit allows.
+        current_idx = [j for j in range(len(all_blocks)) if j not in dropped]
+        for j in range(len(all_blocks)):
+            if j not in dropped:
+                continue
+            trial = sorted(current_idx + [j])
+            if count_chars("\n\n".join(all_blocks[k] for k in trial)) <= budget:
+                dropped.discard(j)
+                current_idx = trial
+        result.dropped_blocks = len(dropped)
+        work = "\n\n".join(all_blocks[k] for k in sorted(current_idx))
+        result.text, result.final_count = work, count_chars(work)
+        if result.final_count <= budget:
+            result.changed = True
+            result.notes.append(
+                "removed lowest-value blocks"
+                if result.dropped_blocks
+                else "reflowed blocks to fit the limit"
+            )
+            return result
 
     # 3. Last resort: cut on a word boundary and mark it.
     if result.final_count > budget:

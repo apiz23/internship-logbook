@@ -41,7 +41,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from char_limit import check_limit, count_chars, fit_to_limit  # noqa: E402
+from char_limit import (  # noqa: E402
+    PREFERRED_DAILY_MAX,
+    band_summary,
+    check_limit,
+    count_chars,
+    fit_to_limit,
+    length_band,
+)
 from logbook_reader import LogbookError  # noqa: E402
 from submission_generator import (  # noqa: E402
     SubmissionGenerator,
@@ -75,6 +82,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="measure one file against --limit and exit",
     )
     p.add_argument("--limit", type=int, default=4000, help="limit for --validate-text")
+    p.add_argument(
+        "--daily-file",
+        action="append",
+        default=[],
+        metavar="YYYY-MM-DD=PATH",
+        help="use an authored task-detail file for one day (repeatable)",
+    )
     p.add_argument("--json", action="store_true", help="emit JSON instead of the portal layout")
     p.add_argument("--list-weeks", action="store_true", help="list weeks with daily records")
     return p
@@ -93,6 +107,7 @@ def submission_to_dict(sub) -> dict:
                 "task_details": d.task_text,
                 "character_count": d.count,
                 "character_limit": d.fit.limit,
+                "preferred_length": d.band,
                 "within_limit": d.within_limit,
                 "source": d.source_path,
             }
@@ -101,6 +116,7 @@ def submission_to_dict(sub) -> dict:
         "weekly_summary": sub.weekly_summary,
         "weekly_summary_character_count": sub.summary_count,
         "weekly_summary_limit": sub.profile.weekly_summary_char_limit,
+        "weekly_summary_preferred_length": sub.summary_band,
         "attachment": {
             "filename": sub.attachment.filename,
             "reason": sub.attachment.reason,
@@ -130,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         text = path.read_text(encoding="utf-8")
         result = check_limit(text, args.limit)
         print(result.summary())
+        print(f"preferred length: {length_band(result.count, PREFERRED_DAILY_MAX, args.limit)}")
         if not result.within_limit:
             fitted = fit_to_limit(text, limit=args.limit)
             print(f"after automatic shortening: {fitted.final_count} / {args.limit}")
@@ -160,7 +177,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: --day must be YYYY-MM-DD, got {args.day!r}", file=sys.stderr)
             return 2
         try:
-            sub = generator.generate_day(day)
+            overrides: dict[date, str] = {}
+            for item in args.daily_file:
+                if "=" not in item:
+                    print(
+                        f"error: --daily-file expects YYYY-MM-DD=PATH, got {item!r}",
+                        file=sys.stderr,
+                    )
+                    return 2
+                day_str, path_str = item.split("=", 1)
+                try:
+                    overrides[date.fromisoformat(day_str)] = Path(path_str).read_text(
+                        encoding="utf-8"
+                    )
+                except (ValueError, OSError) as exc:
+                    print(f"error: --daily-file {item!r}: {exc}", file=sys.stderr)
+                    return 2
+            sub = generator.generate_day(day, daily_overrides=overrides)
         except (FileNotFoundError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
@@ -171,6 +204,15 @@ def main(argv: list[str] | None = None) -> int:
         print(render_day_only(sub, profile.daily_task_char_limit, index=index))
         print(f"Week: {week}")
         print(f"Character count: {sub.count} / {profile.daily_task_char_limit}")
+        print(
+            "Preferred length: "
+            + band_summary(
+                sub.count,
+                profile.daily_task_preferred_min,
+                profile.daily_task_preferred_max,
+                profile.daily_task_char_limit,
+            )
+        )
         print(f"Remaining: {profile.daily_task_char_limit - sub.count}")
         return 0 if sub.within_limit else 1
 
@@ -179,7 +221,22 @@ def main(argv: list[str] | None = None) -> int:
         summary_text = None
         if args.weekly_summary_file:
             summary_text = Path(args.weekly_summary_file).read_text(encoding="utf-8")
-        submission = generator.generate(week=week, summary_text=summary_text)
+        overrides: dict[date, str] = {}
+        for item in args.daily_file:
+            if "=" not in item:
+                print(f"error: --daily-file expects YYYY-MM-DD=PATH, got {item!r}", file=sys.stderr)
+                return 2
+            day_str, path_str = item.split("=", 1)
+            try:
+                overrides[date.fromisoformat(day_str)] = Path(path_str).read_text(
+                    encoding="utf-8"
+                )
+            except (ValueError, OSError) as exc:
+                print(f"error: --daily-file {item!r}: {exc}", file=sys.stderr)
+                return 2
+        submission = generator.generate(
+            week=week, summary_text=summary_text, daily_overrides=overrides
+        )
     except (ProfileError, LogbookError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
