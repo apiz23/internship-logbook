@@ -217,8 +217,11 @@ def test_long_task_detail_is_shortened_and_final_text_measured(tmp_path):
     day = sub.dailies[0]
     assert count_chars(long_task) > 4000
     assert day.count <= profile.daily_task_char_limit
+    # A 4,000-character source is condensed, not filled up to the portal
+    # ceiling; a busy day may reach the detailed allowance.
+    assert day.count <= profile.daily_task_detailed_max
+    assert day.band in {"Concise", "Detailed"}
     assert day.count == count_chars(day.task_text)
-    assert day.fit.changed is True
 
 
 def test_missing_working_hours_are_not_assumed(tmp_path):
@@ -313,16 +316,53 @@ def test_four_day_working_week_profile(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_weekly_summary_reflects_the_days_and_respects_limit(tmp_path):
-    root = make_repo(tmp_path, five_day_week(tmp_path))
+def rich_week(root: Path) -> dict[date, str]:
+    """A week with findings, defects and blockers worth summarising."""
+    from datetime import timedelta
+
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    topics = [
+        "Executed the regression pass on the O'Care school filter and confirmed the "
+        "filtered list matched the selected school. Two mismatched records were "
+        "reproduced and reported as BUG-201, and the remaining checks passed.",
+        "Reviewed the O'Zone upload module on the staging build. Large file upload "
+        "worked, but a video with several subtitle files kept only the first one, "
+        "which was reported as BUG-202 and blocked the subtitle regression checks.",
+        "Documented the test cases written during the week and updated the tracker "
+        "with the recorded outcomes. Thirteen cases moved to Done after verification.",
+        "Investigated the invitation flow and found that an already-registered "
+        "address consumed the invitation without creating an account, reported as "
+        "BUG-203. The fix was not available, so the case stayed blocked.",
+        "Ran the suspension and appeal checks on staging, confirmed the session "
+        "cut-off and the appeal round trip, and closed four cases. Reviewed the "
+        "defect list with the supervisor and agreed the remaining work for next week.",
+    ]
+    days = {}
+    for i, name in enumerate(names):
+        day = START + timedelta(days=i)
+        days[day] = daily_md(
+            day.isoformat(),
+            name,
+            topics[i],
+            issue=f"A blocking defect limited coverage on {name}: BUG-20{i} stayed open.",
+            solution="Recorded the blocker and continued with the unaffected checks.",
+            status="In Progress" if i % 2 else "Completed",
+        )
+    return days
+
+
+def test_weekly_summary_reports_the_week_and_respects_preferred_range(tmp_path):
+    root = make_repo(tmp_path, rich_week(tmp_path))
     profile = load_profile(root)
     sub = SubmissionGenerator(root, profile).generate(week=1)
     summary = sub.weekly_summary
     assert count_chars(summary) <= profile.weekly_summary_char_limit
     assert count_chars(summary) == sub.summary_count
-    for label in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday"):
-        assert label in summary
-    assert "32 hours" in summary or "40 hours" in summary
+    # The summary is about the week, not a re-listing of each day.
+    assert "40 hours" in summary
+    assert "O'Care" in summary or "O'Zone" in summary
+    assert sub.summary_band in {"Concise", "Detailed"}
+    assert count_chars(summary) >= 350
     check = next(c for c in sub.checks if c.name == "Weekly summary")
     assert check.status == PASS
 
@@ -478,6 +518,21 @@ def test_source_accuracy_detects_unrecorded_identifiers(tmp_path):
     assert "BUG-999" in check.detail
 
 
+def test_authored_daily_override_is_used_and_measured(tmp_path):
+    root = make_repo(tmp_path, five_day_week(tmp_path))
+    gen = SubmissionGenerator(root, load_profile(root))
+    authored = "Reviewed the defect tracker and confirmed BUG-11 was reproducible on staging."
+    sub = gen.generate(week=1, daily_overrides={date(2026, 8, 3): authored})
+    day = sub.dailies[0]
+    assert day.task_text == authored
+    assert day.count == count_chars(authored)
+    assert day.authored is True
+    # Authored text still has to be traceable; unrelated wording is flagged.
+    check = next(c for c in sub.checks if c.name == "Source accuracy")
+    assert check.status == ATTENTION
+    assert "2026-08-03" in check.detail
+
+
 def test_daily_only_generation(tmp_path):
     root = make_repo(tmp_path, five_day_week(tmp_path))
     gen = SubmissionGenerator(root, load_profile(root))
@@ -494,6 +549,29 @@ def test_generate_day_for_missing_date_raises(tmp_path):
         gen.generate_day(date(2026, 8, 20))
 
 
+def test_generate_day_honours_authored_override(tmp_path):
+    root = make_repo(tmp_path, five_day_week(tmp_path))
+    gen = SubmissionGenerator(root, load_profile(root))
+    authored = "Executed the assigned checklist items and logged BUG-12 against staging."
+    day = gen.generate_day(
+        date(2026, 8, 5), daily_overrides={date(2026, 8, 5): authored}
+    )
+    assert day.task_text == authored
+    assert day.count == count_chars(authored)
+    assert day.authored is True
+
+
+def test_generate_day_ignores_override_for_another_date(tmp_path):
+    root = make_repo(tmp_path, five_day_week(tmp_path))
+    gen = SubmissionGenerator(root, load_profile(root))
+    authored = "Executed the assigned checklist items and logged BUG-12 against staging."
+    day = gen.generate_day(
+        date(2026, 8, 5), daily_overrides={date(2026, 8, 4): authored}
+    )
+    assert day.task_text != authored
+    assert day.authored is False
+
+
 def test_condense_keeps_source_claims_only(tmp_path):
     task = "Tested the SOS alert toggle on the settings page and confirmed it persisted."
     root = make_repo(tmp_path, {START: daily_md(START.isoformat(), "Monday", task)})
@@ -503,3 +581,119 @@ def test_condense_keeps_source_claims_only(tmp_path):
     assert "SOS alert toggle" in text
     assert fit.final_count == count_chars(text)
     assert "deployed" not in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Concise output (preferred length), noise removal, honesty
+# ---------------------------------------------------------------------------
+
+LONG_DAY = """Reviewed the O'Zone staging build and executed the scheduled regression checks.
+The run covered login, upload, watch and settings flows on desktop and mobile viewports.
+A timestamped log was written at 14:32:07 to attachments/week-01/run-log-2026-08-03.md.
+Full details are available at https://tracker.example.com/tests?run=4481 for reference.
+Forty cases were executed and twelve passed, with two failures reported as BUG-501 and BUG-502.
+Seven partial results were recorded for cases that could not complete without a second account.
+Five cases were blocked by missing admin credentials and four were skipped by design.
+The remaining twelve cases were not run because the refreshed staging URL was not issued.
+The upload flow rejected MOV files above 200 MB, which reproduced twice and was logged as BUG-503.
+Subtitle handling kept only one file when several were selected, already known as BUG-504.
+A short note was added to the tracker for each case, listing the observed behaviour.
+The session closed with the regression board updated and the blockers passed to the supervisor.
+"""
+
+
+def test_daily_field_is_concise_and_measured(tmp_path):
+    root = make_repo(tmp_path, {START: daily_md(START.isoformat(), "Monday", LONG_DAY)})
+    profile = load_profile(root)
+    day = SubmissionGenerator(root, profile).generate(week=1).dailies[0]
+    assert day.count == count_chars(day.task_text)
+    assert day.count <= profile.daily_task_preferred_max
+    assert day.band == "Concise"
+    # 4,000 is a ceiling, not a target: the field is nowhere near it.
+    assert day.count < profile.daily_task_char_limit / 2
+
+
+def test_daily_field_drops_administrative_noise(tmp_path):
+    root = make_repo(tmp_path, {START: daily_md(START.isoformat(), "Monday", LONG_DAY)})
+    text = SubmissionGenerator(root, load_profile(root)).generate(week=1).dailies[0].task_text
+    assert "https://" not in text
+    assert "14:32:07" not in text
+    assert "attachments/week-01" not in text
+
+
+def test_daily_field_keeps_findings_and_defects(tmp_path):
+    root = make_repo(tmp_path, {START: daily_md(START.isoformat(), "Monday", LONG_DAY)})
+    text = SubmissionGenerator(root, load_profile(root)).generate(week=1).dailies[0].task_text
+    assert "BUG-501" in text or "BUG-502" in text or "BUG-503" in text
+    assert "blocked" in text.lower() or "skipped" in text.lower()
+
+
+def test_busy_day_may_exceed_preferred_but_never_the_limit(tmp_path):
+    days = rich_week(tmp_path)
+    root = make_repo(tmp_path, days)
+    profile = load_profile(root)
+    sub = SubmissionGenerator(root, profile).generate(week=1)
+    for day in sub.dailies:
+        assert day.count <= profile.daily_task_char_limit
+        assert day.band in {"Concise", "Detailed"}
+
+
+def test_weekly_summary_does_not_repeat_daily_sentences(tmp_path):
+    root = make_repo(tmp_path, rich_week(tmp_path))
+    sub = SubmissionGenerator(root, load_profile(root)).generate(week=1)
+    daily_sentences = {
+        " ".join(s.lower().split())
+        for d in sub.dailies
+        for s in d.task_text.split(". ")
+        if len(s) > 40
+    }
+    weekly_sentences = [s for s in sub.weekly_summary.split(". ") if len(s) > 40]
+    repeated = [s for s in weekly_sentences if " ".join(s.lower().split()) in daily_sentences]
+    assert repeated == []
+    check = next(c for c in sub.checks if c.name == "Weekly summary")
+    assert "copied" not in check.detail
+
+
+def test_week_report_summary_is_used_and_trimmed(tmp_path):
+    days = rich_week(tmp_path)
+    root = make_repo(tmp_path, days)
+    (root / "weeks" / "week-01.md").write_text(
+        "# Week 1\n\n# Weekly Summary\n\n"
+        + "The week was spent on O'Zone regression work. " * 40
+        + "\n\n# Suggested Attachments\n\n1. Test run report.\n",
+        encoding="utf-8",
+    )
+    profile = load_profile(root)
+    sub = SubmissionGenerator(root, profile).generate(week=1)
+    assert count_chars(sub.weekly_summary) <= profile.weekly_summary_preferred_max
+    assert "O'Zone" in sub.weekly_summary
+
+
+def test_incorrect_defect_total_in_week_report_is_corrected(tmp_path):
+    days = rich_week(tmp_path)  # BUG-200..BUG-204 in the records
+    root = make_repo(tmp_path, days)
+    (root / "weeks" / "week-01.md").write_text(
+        "# Week 1\n\n# Weekly Summary\n\n"
+        "Two defects were reported during the week and most checks passed. "
+        "The regression pass covered the school filter, the upload module and "
+        "the invitation flow across five working days on the staging build.\n\n"
+        "The remaining work was carried into the next week after the supervisor "
+        "reviewed the open blockers and agreed the order of the follow-up checks.\n",
+        encoding="utf-8",
+    )
+    sub = SubmissionGenerator(root, load_profile(root)).generate(week=1)
+    assert "Two defects were reported" not in sub.weekly_summary
+    assert "5 defects were recorded" in sub.weekly_summary
+    assert any("daily records contain 5" in note for note in sub.notes)
+
+
+def test_length_band_is_shown_outside_the_field(tmp_path):
+    root = make_repo(tmp_path, rich_week(tmp_path))
+    profile = load_profile(root)
+    sub = SubmissionGenerator(root, profile).generate(week=1)
+    rendered = render_submission(sub)
+    assert f"({sub.dailies[0].band})" in rendered
+    assert f"({sub.summary_band})" in rendered
+    for day in sub.dailies:
+        assert "Concise" not in day.task_text
+        assert "Detailed" not in day.task_text

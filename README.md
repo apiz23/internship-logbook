@@ -190,13 +190,13 @@ UNIVERSITY INTERNSHIP SUBMISSION — WEEK 13
 DAY 1 — MONDAY
 Date: 2026-10-26
 Total Hours: 8 hours
-Character Count: 3703 / 4000
+Character Count: 1043 / 4000 (Concise)
 
 TASK DETAILS:
 [text you paste - no counters, no headings inside it]
 ...
 WEEKLY SUMMARY
-Character Count: 1035 / 4000
+Character Count: 1180 / 4000 (Concise)
 ...
 WEEKLY ATTACHMENT
 Recommended File: attachments/week-13/otalk-issue-list-2026-10-26.md
@@ -216,14 +216,26 @@ WARNINGS AND VALIDATION
 - Source accuracy: PASS
 ```
 
+### Concise by default
+
+The 4,000-character limit is a maximum, not a target. Daily fields are
+written to 500-1,200 characters (1,500 on a genuinely busy day) and the
+weekly summary to 800-1,500. The generator reads the record in its own order,
+stops at a sentence boundary, drops administrative noise (URLs, clock times,
+file paths, identifier dumps) and keeps findings, defect IDs and blockers.
+Each field reports its band - `Concise`, `Detailed` or `Over limit` - next to
+the measured count, outside the copyable text. Nothing is padded to fill the
+allowance.
+
 ### Experience
 
-One request produces the whole submission. The weekly summary is written from
-the week's records in the same response - you never have to ask for a fuller
-version. Content comes first; validation and notes sit after an
-`END OF COPY-READY CONTENT` marker so nothing diagnostic lands in a paste. A
-missing day keeps its block, marked `(INCOMPLETE - NO DAILY RECORD)`, with an
-empty field and a do-not-submit note.
+One request produces the whole submission. The daily fields and the weekly
+summary are generated, measured and kept concise in the same response - you
+never have to ask for a shorter or fuller version. Content comes first;
+validation and notes sit after an `END OF COPY-READY CONTENT` marker so
+nothing diagnostic lands in a paste. A missing day keeps its block, marked
+`(INCOMPLETE - NO DAILY RECORD)`, with an empty field and a do-not-submit
+note.
 
 ### What it will not do
 
@@ -247,8 +259,11 @@ live there, not in `SKILL.md`:
   "submission_enabled": true,
   "daily_task_char_limit": 4000,
   "weekly_summary_char_limit": 4000,
-  "target_min_chars": 3500,
-  "target_max_chars": 3800,
+  "daily_task_preferred_min": 500,
+  "daily_task_preferred_max": 1200,
+  "daily_task_detailed_max": 1500,
+  "weekly_summary_preferred_min": 800,
+  "weekly_summary_preferred_max": 1500,
   "working_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
   "daily_fields": ["date", "task_details", "total_hours"],
   "weekly_fields": ["weekly_summary", "attachment"],
@@ -271,8 +286,10 @@ python -m pytest tests/test_char_limit.py tests/test_logbook_reader.py \
 ```
 
 Covers exact 4,000 / 4,001 boundaries, spaces, newlines, punctuation and
-Unicode, five-day weeks, public holidays, shorter weeks, missing records,
-missing hours, multiple activities in one day, summary accuracy and limit,
+Unicode, the Concise / Detailed / Over-limit bands, five-day weeks, public
+holidays, shorter weeks, missing records, missing hours, multiple activities
+in one day, concise daily output, removal of timestamps/URLs/file paths,
+preservation of findings and blockers, non-repetitive weekly summary,
 single-attachment selection, and residue checks that existing daily/weekly
 workflows still parse.
 

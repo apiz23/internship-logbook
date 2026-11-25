@@ -170,7 +170,7 @@ def load_credentials(token_path: Path = None) -> Optional[Credentials]:
     # Expired but refreshable -> refresh and persist automatically
     if creds.expired and creds.refresh_token:
         try:
-            creds.refresh(Request())
+            creds.refresh(GoogleRequest())
             with open(token_path, "w") as f:
                 f.write(creds.to_json())
             return creds

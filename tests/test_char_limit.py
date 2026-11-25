@@ -13,6 +13,7 @@ from char_limit import (  # noqa: E402
     count_chars,
     count_chars_crlf,
     fit_to_limit,
+    length_band,
     normalise_newlines,
 )
 
@@ -117,3 +118,41 @@ def test_fit_to_limit_does_not_add_content():
     result = fit_to_limit(text, limit=40, target=40)
     for word in ("Tested", "bug", "Reported"):
         assert word in result.text
+
+
+# ---------------------------------------------------------------------------
+# Preferred length bands (4,000 is an allowance, not a target)
+# ---------------------------------------------------------------------------
+
+
+def test_band_is_concise_within_preferred_range():
+    assert length_band(900, 1200, 4000) == "Concise"
+    assert length_band(1200, 1200, 4000) == "Concise"
+
+
+def test_band_is_detailed_above_preferred_but_inside_limit():
+    assert length_band(1201, 1200, 4000) == "Detailed"
+    assert length_band(4000, 1200, 4000) == "Detailed"
+
+
+def test_band_is_over_limit_only_above_the_portal_maximum():
+    assert length_band(4001, 1200, 4000) == "Over limit"
+    assert length_band(0, 1200, 4000) == "Concise"
+
+
+def test_four_thousand_characters_is_allowed_and_counted():
+    text = "a" * 4000
+    result = check_limit(text, 4000)
+    assert result.count == 4000
+    assert result.within_limit is True
+    assert result.over_by == 0
+    assert length_band(result.count, 1200, 4000) == "Detailed"
+
+
+def test_four_thousand_and_one_is_over_by_one():
+    text = "a" * 4001
+    result = check_limit(text, 4000)
+    assert result.count == 4001
+    assert result.within_limit is False
+    assert result.over_by == 1
+    assert length_band(result.count, 1200, 4000) == "Over limit"

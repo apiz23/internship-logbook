@@ -93,8 +93,12 @@ class UniversitySubmissionProfile:
     submission_enabled: bool = True
     daily_task_char_limit: int = 4000
     weekly_summary_char_limit: int = 4000
-    target_min_chars: int = 3500
-    target_max_chars: int = 3800
+    # Preferred length: the portal limit is an allowance, not a target.
+    daily_task_preferred_min: int = 500
+    daily_task_preferred_max: int = 1200
+    daily_task_detailed_max: int = 1500
+    weekly_summary_preferred_min: int = 800
+    weekly_summary_preferred_max: int = 1500
     working_days: list[str] = field(
         default_factory=lambda: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
     )
@@ -122,10 +126,26 @@ class UniversitySubmissionProfile:
     def validate(self) -> None:
         if self.daily_task_char_limit <= 0 or self.weekly_summary_char_limit <= 0:
             raise ProfileError("Character limits must be positive")
-        if self.target_min_chars > self.target_max_chars:
-            raise ProfileError("target_min_chars must not exceed target_max_chars")
-        if self.target_max_chars > self.weekly_summary_char_limit:
-            raise ProfileError("target_max_chars must not exceed the weekly limit")
+        if self.daily_task_preferred_min > self.daily_task_preferred_max:
+            raise ProfileError(
+                "daily_task_preferred_min must not exceed daily_task_preferred_max"
+            )
+        if self.daily_task_detailed_max < self.daily_task_preferred_max:
+            raise ProfileError(
+                "daily_task_detailed_max must be at least daily_task_preferred_max"
+            )
+        if self.daily_task_detailed_max > self.daily_task_char_limit:
+            raise ProfileError(
+                "daily_task_detailed_max must not exceed daily_task_char_limit"
+            )
+        if self.weekly_summary_preferred_min > self.weekly_summary_preferred_max:
+            raise ProfileError(
+                "weekly_summary_preferred_min must not exceed weekly_summary_preferred_max"
+            )
+        if self.weekly_summary_preferred_max > self.weekly_summary_char_limit:
+            raise ProfileError(
+                "weekly_summary_preferred_max must not exceed weekly_summary_char_limit"
+            )
         if self.max_weekly_attachments != 1:
             raise ProfileError(
                 "This portal accepts exactly one attachment per weekly submission; "
@@ -159,8 +179,15 @@ def _profile_from_dict(data: dict) -> UniversitySubmissionProfile:
         submission_enabled=bool(data.get("submission_enabled", True)),
         daily_task_char_limit=int(data.get("daily_task_char_limit", 4000)),
         weekly_summary_char_limit=int(data.get("weekly_summary_char_limit", 4000)),
-        target_min_chars=int(data.get("target_min_chars", 3500)),
-        target_max_chars=int(data.get("target_max_chars", 3800)),
+        daily_task_preferred_min=int(data.get("daily_task_preferred_min", 500)),
+        daily_task_preferred_max=int(data.get("daily_task_preferred_max", 1200)),
+        daily_task_detailed_max=int(data.get("daily_task_detailed_max", 1500)),
+        weekly_summary_preferred_min=int(
+            data.get("weekly_summary_preferred_min", 800)
+        ),
+        weekly_summary_preferred_max=int(
+            data.get("weekly_summary_preferred_max", 1500)
+        ),
         working_days=list(
             data.get(
                 "working_days",
