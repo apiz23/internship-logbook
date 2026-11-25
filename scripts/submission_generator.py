@@ -470,6 +470,32 @@ def _join_ids(ids: list[str]) -> str:
     return ", ".join(ids[:-1]) + " and " + ids[-1]
 
 
+def _tidy_paragraphs(text: str) -> str:
+    """Close dangling lead-ins and give every paragraph terminal punctuation.
+
+    A record can end a selected sentence on a colon whose bullet list was
+    dropped as administrative noise, which renders as "... carried to a
+    verdict with evidence" and stops dead.
+    """
+    out: list[str] = []
+    for raw in (text or "").split("\n\n"):
+        para = raw.strip()
+        if not para:
+            continue
+        while para.endswith(":"):
+            sentences = split_sentences(para)
+            sentences = [s for s in sentences if s.rstrip().endswith(":") is False]
+            para = " ".join(sentences).strip()
+            if not para:
+                break
+        if not para:
+            continue
+        if para[-1] not in ".!?\"'":
+            para = para.rstrip(" ,;:") + "."
+        out.append(para)
+    return "\n\n".join(out)
+
+
 def _balance_parens(text: str) -> str:
     """Drop an unclosed parenthetical instead of leaving it half-open.
 
@@ -621,7 +647,9 @@ def compose_daily_task(
         if status and normalise_for_compare(f"status: {status}") not in issue_text:
             parts.append(f"Status: {status}.")
 
-    body = "\n\n".join(part.strip() for part in parts if part.strip())
+    body = _tidy_paragraphs(
+        "\n\n".join(part.strip() for part in parts if part.strip())
+    )
     # The preferred maximum is the writing budget; the hard portal limit is
     # enforced again here on the FINAL text, never on the draft.
     fit = fit_to_limit(
@@ -792,6 +820,41 @@ def draft_weekly_summary(
     if focus:
         paragraphs.append(". ".join(focus) + ".")
 
+    # Aggregates alone read like a status page. The portal summary is expected
+    # to say what the week's work actually consisted of, so each day keeps one
+    # clause taken from its own record — never from another day's.
+    day_clauses: list[str] = []
+    for record in active:
+        source = record.task_detail.strip() or record.raw_notes.strip()
+        if not source:
+            continue
+        plain_day = clean_text(to_plain_text(drop_heading_only_blocks(source)))
+        candidates = [
+            s
+            for s in split_sentences(plain_day)
+            if len(s.split()) >= 6
+            and not is_administrative_noise(s)
+            and not s.rstrip().endswith(":")
+            and not re.search(r"\b(?:and|or|the|of|to|with|for)$", s.rstrip())
+        ]
+        if not candidates:
+            continue
+        clause = _trim_clause(candidates[0].rstrip(" .;:"), 190)
+        if not clause or len(clause.split()) < 5:
+            continue
+        lowered = clause.lower()
+        for opener in _DAY_OPENERS:
+            if lowered.startswith(opener):
+                clause = clause[len(opener):].lstrip()
+                lowered = clause.lower()
+                break
+        if not clause or len(clause.split()) < 5:
+            continue
+        clause = _lower_first(clause) if clause[:1].isupper() else clause
+        day_clauses.append(f"{record.weekday} — {clause}")
+    if day_clauses:
+        paragraphs.append("Day by day: " + "; ".join(day_clauses) + ".")
+
 
     bug_ids = sorted(set(_BUG_ID.findall(week_text)))
     case_ids = sorted(
@@ -848,7 +911,7 @@ def draft_weekly_summary(
             "Recorded hours were incomplete for the week, so no daily total was assumed."
         )
 
-    draft = "\n\n".join(p for p in paragraphs if p.strip())
+    draft = _tidy_paragraphs("\n\n".join(p for p in paragraphs if p.strip()))
     fit = fit_to_limit(draft, limit=limit, target=target_max)
     if fit.changed:
         notes.append(fit.summary())

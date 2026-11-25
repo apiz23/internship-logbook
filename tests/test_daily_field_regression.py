@@ -97,3 +97,35 @@ def test_real_records_render_readable_prose(iso, min_chars):
         assert not re.search(r"\b(?:and|or|the|of|to|with|for)$", paragraph.strip())
 
     assert text.rstrip()[-1] in ".!?\""
+
+
+def test_no_paragraph_stops_on_a_colon():
+    """A dropped bullet list must not leave a dangling lead-in."""
+    from submission_generator import _tidy_paragraphs  # noqa: E402
+
+    text = _tidy_paragraphs(
+        "Eight were carried to a verdict with evidence:\n\n"
+        "The next paragraph carries no final stop"
+    )
+    for para in text.split("\n\n"):
+        assert not para.endswith(":"), para
+        assert para.endswith("."), para
+
+
+def test_weekly_summary_is_built_from_the_days():
+    """Without a written week report the summary still says what happened."""
+    from submission_generator import draft_weekly_summary  # noqa: E402
+
+    week = reader_for_tests().collect_week(17)
+    if not week.records:
+        pytest.skip("week 17 is not in this checkout")
+    text, _fit, _notes = draft_weekly_summary(week)
+    assert "Day by day" in text
+    assert "working days" in text
+    # It must name both days, not just aggregate counts.
+    assert "Monday" in text and "Tuesday" in text
+    assert len(text) >= 600, f"weekly summary collapsed to {len(text)} characters"
+
+
+def reader_for_tests():
+    return LogbookReader(ROOT, load_profile(ROOT))
